@@ -17,13 +17,17 @@ import cv2
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize Firebase Admin SDK
+# Initialize Firebase Admin SDK
 if not firebase_admin._apps:
     try:
         # Use st.secrets for Firebase credentials in the cloud
         firebase_credentials = st.secrets["firebase"]["credential"]
-        cred = credentials.Certificate(firebase_credentials)
-    except (KeyError, ValueError):
+        # Parse the JSON string into a dictionary
+        cred_dict = json.loads(firebase_credentials)
+        cred = credentials.Certificate(cred_dict)
+    except (KeyError, ValueError, json.JSONDecodeError) as e:
         # Fallback for local development
+        logging.warning(f"Failed to load credentials from st.secrets: {str(e)}. Falling back to local file.")
         cred = credentials.Certificate("logoadder-d22b5-firebase-adminsdk.json")
     firebase_admin.initialize_app(cred)
 db = firestore.client()
