@@ -2,6 +2,6 @@ streamlit
 firebase-admin
 Pillow
 numpy
-moviepy
+moviepy==1.0.3
 requests
 opencv-python-headless==4.5.5.64
