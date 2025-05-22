@@ -41,7 +41,8 @@ except KeyError:
 
 # Configuration
 class Config:
-    LOGO_SIZE_PERCENT = 0.3
+    LOGO_SIZE_PERCENT = 0.5
+    
     LOGO_TRANSPARENCY = 0.45
     MAX_EXECUTIONS = 27
     EXECUTION_COLLECTION = "executions"
