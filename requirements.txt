@@ -3,5 +3,6 @@ firebase-admin
 Pillow
 numpy
 moviepy==1.0.3
+imageio-ffmpeg
 requests
-opencv-python-headless==4.5.5.64
+opencv-python-headless==4.9.0.80
