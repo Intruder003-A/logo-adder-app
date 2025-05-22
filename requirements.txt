@@ -1,0 +1,7 @@
+streamlit
+firebase-admin
+Pillow
+numpy
+moviepy
+requests
+opencv-python-headless==4.5.5.64

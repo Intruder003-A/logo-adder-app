@@ -1,0 +1,9 @@
+# Ignore Firebase credentials file
+logoadder-d22b5-firebase-adminsdk.json
+
+# Ignore temporary directories
+temp_files/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
