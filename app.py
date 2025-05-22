@@ -12,48 +12,44 @@ import shutil
 import requests
 import json
 import cv2
+import zipfile
+import io
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize Firebase Admin SDK
-# Initialize Firebase Admin SDK
 if not firebase_admin._apps:
     try:
-        # Use st.secrets for Firebase credentials in the cloud
         firebase_credentials = st.secrets["firebase"]["credential"]
-        # Parse the JSON string into a dictionary
         cred_dict = json.loads(firebase_credentials)
         cred = credentials.Certificate(cred_dict)
     except (KeyError, ValueError, json.JSONDecodeError) as e:
-        # Fallback for local development
         logging.warning(f"Failed to load credentials from st.secrets: {str(e)}. Falling back to local file.")
         cred = credentials.Certificate("logoadder-d22b5-firebase-adminsdk.json")
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# Firebase Web API Key (stored in st.secrets for cloud deployment)
+# Firebase Web API Key
 try:
     FIREBASE_API_KEY = st.secrets["firebase"]["api_key"]
 except KeyError:
-    # Fallback for local development
     FIREBASE_API_KEY = "AIzaSyD5DufwXe2cOPZniy-3K-LTRA-csWcbWEg"
 
 # Configuration
 class Config:
     LOGO_SIZE_PERCENT = 0.5
-    
     LOGO_TRANSPARENCY = 0.45
     MAX_EXECUTIONS = 27
     EXECUTION_COLLECTION = "executions"
     LICENSE_COLLECTION = "licenses"
     FOLDERS = ["Logos", "Media", "Logoed_Media"]
-    # Compute paths relative to app.py
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DNN_PROTO_PATH = os.path.join(BASE_DIR, "models", "deploy.prototxt")
     DNN_MODEL_PATH = os.path.join(BASE_DIR, "models", "res10_300x300_ssd_iter_140000.caffemodel")
     BLUR_KERNEL = (101, 101)
     CONFIDENCE_THRESHOLD = 0.2
+    LOGO_OFFSET_PERCENT = 0.1  # 10% offset from center for top/bottom
 
 # State management
 class State:
@@ -62,6 +58,7 @@ class State:
     license_expiry = None
     device_id = str(uuid.uuid4())
     net = None
+    logoed_files = []  # Store paths of logoed files
 
 # Ensure directories exist
 def ensure_directories(base_path):
@@ -70,20 +67,10 @@ def ensure_directories(base_path):
 
 # Load DNN model for face detection
 def load_dnn_model():
-    # Log the paths being checked
     logging.info("Checking for DNN model files at: %s and %s", Config.DNN_PROTO_PATH, Config.DNN_MODEL_PATH)
-    
-    # Check if files exist
-    if not os.path.exists(Config.DNN_PROTO_PATH):
-        logging.error("DNN proto file not found at: %s", Config.DNN_PROTO_PATH)
-    if not os.path.exists(Config.DNN_MODEL_PATH):
-        logging.error("DNN model file not found at: %s", Config.DNN_MODEL_PATH)
-    
     if not (os.path.exists(Config.DNN_PROTO_PATH) and os.path.exists(Config.DNN_MODEL_PATH)):
         logging.error("DNN model files not found.")
         return None
-    
-    # Attempt to load the model
     try:
         net = cv2.dnn.readNetFromCaffe(Config.DNN_PROTO_PATH, Config.DNN_MODEL_PATH)
         logging.info("DNN model loaded successfully.")
@@ -129,7 +116,7 @@ def process_image(image, net, blur_enabled):
     logging.info("Blur applied to image")
     return Image.fromarray(processed).convert('RGBA')
 
-# Process video for blurring, preserving audio
+# Process video for blurring
 def process_video(video_path, output_path, net, blur_enabled):
     if not blur_enabled or net is None:
         logging.info("Blur skipped for video: blur_enabled=%s, net=%s", blur_enabled, net is not None)
@@ -140,8 +127,6 @@ def process_video(video_path, output_path, net, blur_enabled):
         original_clip = VideoFileClip(video_path)
         audio = original_clip.audio
         has_audio = audio is not None
-        logging.info("Original video loaded, has_audio=%s", has_audio)
-
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             logging.error("Failed to open video: %s", video_path)
@@ -150,7 +135,6 @@ def process_video(video_path, output_path, net, blur_enabled):
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
-
         temp_output_path = output_path + "_temp.mp4"
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(temp_output_path, fourcc, fps, (width, height))
@@ -159,18 +143,15 @@ def process_video(video_path, output_path, net, blur_enabled):
             original_clip.close()
             logging.error("Failed to initialize video writer: %s", temp_output_path)
             return
-
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret or frame is None:
                 break
             frame = process_frame(frame, net, width, height, blur_enabled)
             out.write(frame)
-
         cap.release()
         out.release()
         cv2.destroyAllWindows()
-
         video_clip = VideoFileClip(temp_output_path)
         if has_audio:
             video_clip = video_clip.set_audio(audio)
@@ -183,7 +164,6 @@ def process_video(video_path, output_path, net, blur_enabled):
             preset='fast',
             bitrate='5000k'
         )
-
         video_clip.close()
         original_clip.close()
         if os.path.exists(temp_output_path):
@@ -287,8 +267,8 @@ def validate_patch(patch_id, user_id):
         st.error("Error applying patch.")
         return False
 
-# Overlay logo on image
-def overlay_logo_on_image(image, logo_path):
+# Overlay logo on image with position option
+def overlay_logo_on_image(image, logo_path, position="center"):
     try:
         logo = Image.open(logo_path).convert("RGBA")
         img_width, img_height = image.size
@@ -297,8 +277,19 @@ def overlay_logo_on_image(image, logo_path):
         logo_array = np.array(logo)
         logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
         logo = Image.fromarray(logo_array)
-        x = (img_width - logo.size[0]) // 2
-        y = (img_height - logo.size[1]) // 2
+        
+        # Calculate position
+        offset = int(min(img_width, img_height) * Config.LOGO_OFFSET_PERCENT)
+        if position == "top":
+            x = (img_width - logo.size[0]) // 2
+            y = offset
+        elif position == "bottom":
+            x = (img_width - logo.size[0]) // 2
+            y = img_height - logo.size[1] - offset
+        else:  # center
+            x = (img_width - logo.size[0]) // 2
+            y = (img_height - logo.size[1]) // 2
+        
         output = Image.new("RGBA", image.size)
         output.paste(image, (0, 0))
         output.paste(logo, (x, y), logo)
@@ -307,8 +298,8 @@ def overlay_logo_on_image(image, logo_path):
         logging.error("Error overlaying logo on image: %s", e)
         return image
 
-# Overlay logo on video
-def overlay_logo_on_video(video_path, logo_path, output_path):
+# Overlay logo on video with position option
+def overlay_logo_on_video(video_path, logo_path, output_path, position="center"):
     try:
         video = VideoFileClip(video_path)
         logo = Image.open(logo_path).convert("RGBA")
@@ -321,8 +312,19 @@ def overlay_logo_on_video(video_path, logo_path, output_path):
         temp_logo_path = f"temp_logo_{uuid.uuid4()}.png"
         logo.save(temp_logo_path, "PNG")
         logo_clip = ImageClip(temp_logo_path).set_duration(video.duration)
-        x = (vid_width - logo.size[0]) // 2
-        y = (vid_height - logo.size[1]) // 2
+        
+        # Calculate position
+        offset = int(min(vid_width, vid_height) * Config.LOGO_OFFSET_PERCENT)
+        if position == "top":
+            x = (vid_width - logo.size[0]) // 2
+            y = offset
+        elif position == "bottom":
+            x = (vid_width - logo.size[0]) // 2
+            y = vid_height - logo.size[1] - offset
+        else:  # center
+            x = (vid_width - logo.size[0]) // 2
+            y = (vid_height - logo.size[1]) // 2
+        
         logo_clip = logo_clip.set_position((x, y))
         final_clip = CompositeVideoClip([video, logo_clip])
         final_clip.write_videofile(
@@ -342,7 +344,21 @@ def overlay_logo_on_video(video_path, logo_path, output_path):
         logging.error("Error processing video: %s", e)
         raise
 
-# Verify email and password using Firebase Auth REST API
+# Create ZIP file for multiple downloads
+def create_zip_file(file_paths):
+    try:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for file_path in file_paths:
+                if os.path.exists(file_path):
+                    zip_file.write(file_path, os.path.basename(file_path))
+        zip_buffer.seek(0)
+        return zip_buffer
+    except Exception as e:
+        logging.error("Error creating ZIP file: %s", e)
+        return None
+
+# Verify user
 def verify_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
     payload = {
@@ -376,10 +392,10 @@ def main():
         st.session_state.user = None
         st.session_state.auth_error = None
         st.session_state.reset_message = None
+        st.session_state.logo_position = "center"
 
     if not st.session_state.user:
         st.subheader("Login")
-
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
         col1, col2 = st.columns([1, 2])
@@ -422,10 +438,9 @@ def main():
                 st.success(st.session_state.reset_message)
             else:
                 st.error(st.session_state.reset_message)
-
         return
 
-    # Check license (only after login)
+    # Check license
     if not check_license(State.user_id):
         st.subheader("Apply Patch")
         patch_id = st.text_input("Enter Patch ID")
@@ -434,31 +449,47 @@ def main():
                 st.rerun()
         return
 
-    # Load DNN model (only once, after login)
+    # Load DNN model
     if State.net is None:
         State.net = load_dnn_model()
         if State.net is None:
             st.warning("Face detection model failed to load. Blurring functionality will be disabled.")
 
-    # File upload and processing (only after login and license check)
+    # File upload and processing
     st.subheader("Upload Files")
     base_path = "temp_files"
     ensure_directories(base_path)
 
-    # Initialize session state for files and options
+    # Initialize session state
     if "logo_file" not in st.session_state:
         st.session_state.logo_file = None
     if "media_files" not in st.session_state:
         st.session_state.media_files = []
     if "blur_enabled" not in st.session_state:
         st.session_state.blur_enabled = False
+    if "logoed_files" not in st.session_state:
+        st.session_state.logoed_files = []
 
     # File upload
     logo_file = st.file_uploader("Upload Logo (PNG)", type=["png"], key="logo")
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
     st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.blur_enabled)
 
-    # Update session state with uploaded files
+    # Logo position selection
+    st.subheader("Logo Position")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("Top"):
+            st.session_state.logo_position = "top"
+    with col2:
+        if st.button("Center"):
+            st.session_state.logo_position = "center"
+    with col3:
+        if st.button("Bottom"):
+            st.session_state.logo_position = "bottom"
+    st.write(f"Selected Logo Position: {st.session_state.logo_position.capitalize()}")
+
+    # Update session state
     if logo_file:
         st.session_state.logo_file = logo_file
     if media_files:
@@ -470,7 +501,9 @@ def main():
             logo_path = os.path.join(base_path, "Logos", st.session_state.logo_file.name)
             with open(logo_path, "wb") as f:
                 f.write(st.session_state.logo_file.getbuffer())
-
+            
+            st.session_state.logoed_files = []  # Reset logoed files list
+            
             for media_file in st.session_state.media_files:
                 media_path = os.path.join(base_path, "Media", media_file.name)
                 output_filename = f"logoed_{datetime.now().strftime('%Y%m%d%H%M%S')}_{media_file.name}"
@@ -492,29 +525,49 @@ def main():
                     # Step 2: Apply logo
                     if media_file.name.lower().endswith((".jpg", "jpeg", "png")):
                         image = Image.open(intermediate_path).convert("RGBA")
-                        output_image = overlay_logo_on_image(image, logo_path)
+                        output_image = overlay_logo_on_image(image, logo_path, st.session_state.logo_position)
                         output_image.save(output_path, "PNG")
-                        with open(output_path, "rb") as f:
-                            st.download_button(f"Download {output_filename}", f, file_name=output_filename)
+                        st.session_state.logoed_files.append(output_path)
                     else:
-                        overlay_logo_on_video(intermediate_path, logo_path, output_path)
-                        with open(output_path, "rb") as f:
-                            st.download_button(f"Download {output_filename}", f, file_name=output_filename)
+                        overlay_logo_on_video(intermediate_path, logo_path, output_path, st.session_state.logo_position)
+                        st.session_state.logoed_files.append(output_path)
                     increment_execution(State.user_id)
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {e}")
                 finally:
-                    # Clean up intermediate file
                     if os.path.exists(intermediate_path):
                         os.remove(intermediate_path)
 
-            # Clean up base directory
+            # Display download buttons for individual files
+            st.subheader("Download Logoed Files")
+            for file_path in st.session_state.logoed_files:
+                if os.path.exists(file_path):
+                    with open(file_path, "rb") as f:
+                        st.download_button(
+                            label=f"Download {os.path.basename(file_path)}",
+                            data=f,
+                            file_name=os.path.basename(file_path),
+                            key=f"download_{os.path.basename(file_path)}"
+                        )
+
+            # Download all as ZIP
+            if st.session_state.logoed_files:
+                zip_buffer = create_zip_file(st.session_state.logoed_files)
+                if zip_buffer:
+                    st.download_button(
+                        label="Download All as ZIP",
+                        data=zip_buffer,
+                        file_name=f"logoed_files_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip",
+                        mime="application/zip",
+                        key="download_all_zip"
+                    )
+
+            # Clean up
             shutil.rmtree(base_path)
             ensure_directories(base_path)
-
-            # Clear session state
             st.session_state.logo_file = None
             st.session_state.media_files = []
+            st.session_state.logoed_files = []
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
