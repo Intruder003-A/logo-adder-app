@@ -12,8 +12,7 @@ import shutil
 import requests
 import json
 import cv2
-import zipfile
-import io
+import base64
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -343,19 +342,30 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         logging.error("Error processing video: %s", e)
         raise
 
-# Create ZIP file for multiple downloads
-def create_zip_file(file_paths):
-    try:
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for file_path in file_paths:
-                if os.path.exists(file_path):
-                    zip_file.write(file_path, os.path.basename(file_path))
-        zip_buffer.seek(0)
-        return zip_buffer
-    except Exception as e:
-        logging.error("Error creating ZIP file: %s", e)
-        return None
+# JavaScript to trigger multiple downloads
+def trigger_multiple_downloads(files):
+    js_code = """
+    <script>
+        function downloadFiles(files) {
+            files.forEach(file => {
+                const link = document.createElement('a');
+                link.href = file.url;
+                link.download = file.name;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            });
+        }
+    </script>
+    """
+    files_json = json.dumps([{
+        "url": f"data:application/octet-stream;base64,{base64.b64encode(open(file_path, 'rb').read()).decode('utf-8')}",
+        "name": os.path.basename(file_path)
+    } for file_path, _ in files])
+    st.markdown(js_code, unsafe_allow_html=True)
+    st.markdown(f"""
+    <button onclick='downloadFiles({files_json})'>Download All Files</button>
+    """, unsafe_allow_html=True)
 
 # Verify user
 def verify_user(email, password):
@@ -550,24 +560,9 @@ def main():
                             help=f"Download logoed file: {original_name}"
                         )
 
-            # Download all as ZIP
+            # Download all files button
             if st.session_state.logoed_files:
-                zip_buffer = create_zip_file([file_path for file_path, _ in st.session_state.logoed_files])
-                if zip_buffer:
-                    st.download_button(
-                        label="Download All as ZIP",
-                        data=zip_buffer,
-                        file_name=f"logoed_files_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip",
-                        mime="application/zip",
-                        key=f"zip_download_{uuid.uuid4()}"
-                    )
-
-            # Clean up (but keep files for download persistence)
-            # shutil.rmtree(base_path)
-            # ensure_directories(base_path)
-            # st.session_state.logo_file = None
-            # st.session_state.media_files = []
-            # st.session_state.logoed_files = []
+                trigger_multiple_downloads(st.session_state.logoed_files)
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
