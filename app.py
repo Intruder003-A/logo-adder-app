@@ -1,7 +1,7 @@
 import os
 import streamlit as st
 import firebase_admin
-from firebase_admin import credentials, firestore, auth, storage
+from firebase_admin import credentials, firestore, auth
 from PIL import Image
 import numpy as np
 from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
@@ -17,7 +17,7 @@ import io
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Initialize Firebase Admin SDK
+# Initialize Firebase Admin SDK (only for Authentication and Firestore)
 if not firebase_admin._apps:
     try:
         firebase_credentials = st.secrets["firebase"]["credential"]
@@ -26,11 +26,8 @@ if not firebase_admin._apps:
     except (KeyError, ValueError, json.JSONDecodeError) as e:
         logging.warning(f"Failed to load credentials from st.secrets: {str(e)}. Falling back to local file.")
         cred = credentials.Certificate("logoadder-d22b5-firebase-adminsdk.json")
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': 'logoadder-d22b5.appspot.com'  # Replace with your Firebase Storage bucket
-    })
+    firebase_admin.initialize_app(cred)  # No storageBucket, as Storage is optional
 db = firestore.client()
-bucket = storage.bucket()
 
 # Firebase Web API Key
 try:
@@ -345,43 +342,6 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         logging.error("Error processing video: %s", e)
         raise
 
-# Retrieve user's logos from Firebase Storage
-def get_user_logos(user_id):
-    try:
-        blobs = bucket.list_blobs(prefix=f"logos/{user_id}/")
-        logos = [(blob.name, blob.generate_signed_url(timedelta(minutes=30))) for blob in blobs if blob.name.endswith('.png')]
-        logging.info(f"Retrieved {len(logos)} logos for user {user_id}")
-        return logos
-    except Exception as e:
-        logging.error(f"Error retrieving logos for user {user_id}: {e}")
-        return []
-
-# Upload logo to Firebase Storage
-def upload_logo_to_storage(user_id, logo_file):
-    try:
-        # Ensure file pointer is at the start
-        logo_file.seek(0)
-        blob = bucket.blob(f"logos/{user_id}/{logo_file.name}")
-        blob.upload_from_file(logo_file, content_type='image/png')
-        logging.info(f"Uploaded logo {logo_file.name} for user {user_id}")
-        return blob.name
-    except Exception as e:
-        logging.error(f"Error uploading logo for user {user_id}: {str(e)}")
-        st.error(f"Failed to upload logo to storage: {str(e)}")
-        return None
-
-# Download logo from Firebase Storage to local path
-def download_logo_from_storage(logo_path, local_path):
-    try:
-        blob = bucket.blob(logo_path)
-        blob.download_to_filename(local_path)
-        logging.info(f"Downloaded logo {logo_path} to {local_path}")
-        return local_path
-    except Exception as e:
-        logging.error(f"Error downloading logo {logo_path}: {e}")
-        st.error(f"Failed to download logo: {str(e)}")
-        return None
-
 # Verify user
 def verify_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
@@ -418,8 +378,6 @@ def main():
         st.session_state.reset_message = None
         st.session_state.logo_position = "center"
         st.session_state.logoed_files = []
-        st.session_state.selected_logo = None
-        st.session_state.user_logos = []
         st.session_state.logo_file = None
         st.session_state.media_files = []
         st.session_state.processed_files_data = []  # Store file data for persistence
@@ -441,7 +399,6 @@ def main():
                         State.user_id = uid
                         st.session_state.auth_error = None
                         st.session_state.reset_message = None
-                        st.session_state.user_logos = get_user_logos(uid)
                         st.success("Logged in successfully.")
                         st.rerun()
                     else:
@@ -491,42 +448,16 @@ def main():
     base_path = "temp_files"
     ensure_directories(base_path)
 
-    # Logo selection or upload
-    st.subheader("Select or Upload Logo")
-    logo_options = ["Upload New Logo"] + [os.path.basename(logo_path) for logo_path, _ in st.session_state.user_logos]
-    selected_logo = st.selectbox("Choose a logo", logo_options, key="logo_select")
-    
-    if selected_logo == "Upload New Logo":
-        logo_file = st.file_uploader("Upload Logo (PNG)", type=["png"], key="logo")
-        if logo_file:
-            # Save to local temp and upload to Firebase Storage
-            temp_logo_path = os.path.join(base_path, "Logos", logo_file.name)
-            with open(temp_logo_path, "wb") as f:
-                f.write(logo_file.getbuffer())
-            logo_file.seek(0)  # Reset file pointer for upload
-            logo_path = upload_logo_to_storage(State.user_id, logo_file)
-            if logo_path:
-                st.session_state.user_logos.append((logo_path, None))
-                st.session_state.logo_file = logo_file
-                st.session_state.selected_logo = logo_path
-                st.success(f"Logo {logo_file.name} uploaded and saved.")
-            else:
-                st.error("Failed to upload logo to storage. Check Firebase Storage configuration.")
-    else:
-        # Use selected logo from Firebase Storage
-        for logo_path, _ in st.session_state.user_logos:
-            if os.path.basename(logo_path) == selected_logo:
-                st.session_state.selected_logo = logo_path
-                # Download logo to local temp for processing
-                local_logo_path = os.path.join(base_path, "Logos", selected_logo)
-                if download_logo_from_storage(logo_path, local_logo_path):
-                    st.session_state.logo_file = type('obj', (object,), {
-                        'name': selected_logo,
-                        'getbuffer': lambda: open(local_logo_path, 'rb').read()
-                    })
-                else:
-                    st.error("Failed to download selected logo.")
-                break
+    # Logo upload
+    st.subheader("Upload Logo")
+    logo_file = st.file_uploader("Upload Logo (PNG)", type=["png"], key="logo")
+    if logo_file:
+        # Save logo to local temp
+        temp_logo_path = os.path.join(base_path, "Logos", logo_file.name)
+        with open(temp_logo_path, "wb") as f:
+            f.write(logo_file.getbuffer())
+        st.session_state.logo_file = logo_file
+        st.success(f"Logo {logo_file.name} uploaded successfully.")
 
     # Media file upload
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
@@ -576,8 +507,7 @@ def main():
                     )
 
     # Start Logoing button
-    # Simplified condition: Check if a logo is selected (either new or stored) and media files are uploaded
-    if (st.session_state.logo_file or st.session_state.selected_logo) and st.session_state.media_files:
+    if st.session_state.logo_file and st.session_state.media_files:
         if st.button("Start Logoing"):
             # Clear previous logoed files
             st.session_state.logoed_files = []
@@ -654,14 +584,6 @@ def main():
                             key=f"download_all_{uuid.uuid4()}",
                             help=f"Downloading logoed file: {original_name}"
                         )
-
-    # Debug session state
-    if st.session_state.get("debug", False):
-        st.write("Debug Session State:")
-        st.write(f"logo_file: {st.session_state.logo_file}")
-        st.write(f"selected_logo: {st.session_state.selected_logo}")
-        st.write(f"media_files: {len(st.session_state.media_files)} files")
-        st.write(f"user_logos: {len(st.session_state.user_logos)} logos")
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
