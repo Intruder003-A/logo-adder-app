@@ -13,11 +13,12 @@ import requests
 import json
 import cv2
 import io
+import base64
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Initialize Firebase Admin SDK (only for Authentication and Firestore)
+# Initialize Firebase Admin SDK
 if not firebase_admin._apps:
     try:
         firebase_credentials = st.secrets["firebase"]["credential"]
@@ -63,11 +64,11 @@ class Config:
     DNN_MODEL_PATH = os.path.join(BASE_DIR, "models", "res10_300x300_ssd_iter_140000.caffemodel")
     BLUR_KERNEL = (101, 101)
     CONFIDENCE_THRESHOLD = 0.2
-    LOGO_OFFSET_PERCENT = 0.1  # 10% offset from center for top/bottom
+    LOGO_OFFSET_PERCENT = 0.1
+    USE_JAVASCRIPT_DOWNLOAD = False  # Set to True to use JavaScript-based download (previous code)
 
 # State management
 class State:
-    user_id = None
     execution_count = 0
     license_expiry = None
     device_id = str(uuid.uuid4())
@@ -365,6 +366,45 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         logging.error("Error processing video: %s", e)
         raise
 
+# JavaScript-based download (from previous code, optional)
+def trigger_multiple_downloads(files):
+    js_code = """
+    <style>
+        .download-all-btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .download-all-btn:hover {
+            background-color: #45a049;
+        }
+    </style>
+    <script>
+        function downloadFiles(files) {
+            files.forEach(file => {
+                const link = document.createElement('a');
+                link.href = file.url;
+                link.download = file.name;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            });
+        }
+    </script>
+    """
+    files_json = json.dumps([{
+        "url": f"data:application/octet-stream;base64,{base64.b64encode(open(file_path, 'rb').read()).decode('utf-8')}",
+        "name": os.path.basename(file_path)
+    } for file_path, _, _ in files])
+    st.markdown(js_code, unsafe_allow_html=True)
+    st.markdown(f"""
+    <button class="download-all-btn" onclick='downloadFiles({files_json})'>Download All Files</button>
+    """, unsafe_allow_html=True)
+
 # Verify user
 def verify_user(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
@@ -431,9 +471,10 @@ def main():
         </style>
     """, unsafe_allow_html=True)
     
-    # Authentication
+    # Initialize session state
     if "user" not in st.session_state:
         st.session_state.user = None
+        st.session_state.user_id = None
         st.session_state.auth_error = None
         st.session_state.reset_message = None
         st.session_state.logo_position = "center"
@@ -442,7 +483,12 @@ def main():
         st.session_state.media_files = []
         st.session_state.processed_files_data = []
         st.session_state.download_all_index = None
+        st.session_state.blur_enabled = False
 
+    # Debug session state at start
+    logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}")
+
+    # Authentication
     if not st.session_state.user:
         st.subheader("Login")
         email = st.text_input("Email")
@@ -453,14 +499,15 @@ def main():
             if st.button("Login"):
                 if not email or not password:
                     st.session_state.auth_error = "Please enter both email and password."
+                    logging.error("Login attempted without email or password")
                 else:
                     uid, error = verify_user(email, password)
                     if uid:
                         st.session_state.user = uid
-                        State.user_id = uid
+                        st.session_state.user_id = uid
                         st.session_state.auth_error = None
                         st.session_state.reset_message = None
-                        logging.info(f"Session state updated: user={uid}")
+                        logging.info(f"Login successful: user={uid}, setting session state")
                         st.success("Logged in successfully.")
                         st.rerun()
                     else:
@@ -471,6 +518,7 @@ def main():
             if st.button("Forgot Password?"):
                 if not email:
                     st.session_state.reset_message = "Please enter your email to reset the password."
+                    logging.error("Password reset attempted without email")
                 else:
                     try:
                         auth.get_user_by_email(email)
@@ -494,12 +542,20 @@ def main():
                 st.error(st.session_state.reset_message)
         return
 
+    # Sync user_id
+    if st.session_state.user and not st.session_state.user_id:
+        st.session_state.user_id = st.session_state.user
+        logging.info(f"Synced user_id from user: {st.session_state.user_id}")
+
+    # Debug session state after login
+    logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}")
+
     # Check license
-    if not check_license(State.user_id):
+    if not check_license(st.session_state.user_id):
         st.subheader("Apply Patch")
         patch_id = st.text_input("Enter Patch ID")
         if st.button("Apply Patch"):
-            if validate_patch(patch_id, State.user_id):
+            if validate_patch(patch_id, st.session_state.user_id):
                 st.rerun()
         return
 
@@ -518,7 +574,6 @@ def main():
     st.subheader("Upload Logo")
     logo_file = st.file_uploader("Upload Logo (PNG)", type=["png"], key="logo")
     if logo_file:
-        # Save logo to local temp
         temp_logo_path = os.path.join(base_path, "Logos", logo_file.name)
         with open(temp_logo_path, "wb") as f:
             f.write(logo_file.getbuffer())
@@ -527,7 +582,7 @@ def main():
 
     # Media file upload
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
-    st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.get("blur_enabled", False))
+    st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.blur_enabled)
 
     # Update session state for media files
     if media_files:
@@ -563,13 +618,16 @@ def main():
         # Download all files button
         if len(st.session_state.processed_files_data) > 1:
             st.warning("Please allow multiple downloads in your browser if prompted.")
-            if st.button("Download All Files", key="download_all", help="Download all logoed files"):
-                st.session_state.download_all_index = 0  # Start downloading from the first file
-                logging.info("Download All Files initiated")
-                st.rerun()
+            if Config.USE_JAVASCRIPT_DOWNLOAD:
+                trigger_multiple_downloads(st.session_state.processed_files_data)
+            else:
+                if st.button("Download All Files", key="download_all", help="Download all logoed files"):
+                    st.session_state.download_all_index = 0
+                    logging.info("Download All Files initiated")
+                    st.rerun()
 
-    # Handle Download All Files
-    if st.session_state.get("download_all_index") is not None and st.session_state.processed_files_data:
+    # Handle Download All Files (sequential)
+    if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.get("download_all_index") is not None and st.session_state.processed_files_data:
         index = st.session_state.download_all_index
         if index < len(st.session_state.processed_files_data):
             file_path, original_name, file_data = st.session_state.processed_files_data[index]
@@ -584,16 +642,15 @@ def main():
             st.session_state.download_all_index += 1
             st.rerun()
         else:
-            st.session_state.download_all_index = None  # Reset after all files are downloaded
+            st.session_state.download_all_index = None
             logging.info("Download All Files completed")
 
     # Start Logoing button
     if st.session_state.logo_file and st.session_state.media_files:
         if st.button("Start Logoing", key="start_logoing", type="primary"):
-            # Clear previous logoed files
             st.session_state.logoed_files = []
             st.session_state.processed_files_data = []
-            st.session_state.download_all_index = None  # Reset download all state
+            st.session_state.download_all_index = None
             
             logo_path = os.path.join(base_path, "Logos", st.session_state.logo_file.name)
             if not os.path.exists(logo_path):
@@ -633,7 +690,7 @@ def main():
                         with open(output_path, "rb") as f:
                             file_data = f.read()
                         processed_files.append((output_path, media_file.name, file_data))
-                    increment_execution(State.user_id)
+                    increment_execution(st.session_state.user_id)
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {e}")
                     logging.error(f"Error processing {media_file.name}: {e}")
@@ -659,19 +716,22 @@ def main():
             # Download all files button
             if len(st.session_state.processed_files_data) > 1:
                 st.warning("Please allow multiple downloads in your browser if prompted.")
-                st.button("Download All Files", key="download_all", help="Download all logoed files")
+                if Config.USE_JAVASCRIPT_DOWNLOAD:
+                    trigger_multiple_downloads(st.session_state.processed_files_data)
+                else:
+                    st.button("Download All Files", key="download_all", help="Download all logoed files")
 
     # Debug session state
     st.session_state.debug = True
     if st.session_state.get("debug", False):
         st.subheader("Debug Session State")
         st.write(f"user: {st.session_state.user}")
+        st.write(f"user_id: {st.session_state.user_id}")
         st.write(f"auth_error: {st.session_state.auth_error}")
         st.write(f"logo_file: {st.session_state.logo_file}")
         st.write(f"media_files: {len(st.session_state.media_files)} files")
         st.write(f"processed_files_data: {len(st.session_state.processed_files_data)} files")
         st.write(f"download_all_index: {st.session_state.download_all_index}")
-        st.write(f"State.user_id: {State.user_id}")
         st.write(f"State.execution_count: {State.execution_count}")
 
     # Admin panel
