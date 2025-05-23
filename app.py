@@ -296,14 +296,16 @@ def apply_patch(user_id, new_count, days_valid):
         patch_id = str(uuid.uuid4())
         doc_ref = db.collection(Config.LICENSE_COLLECTION).document(patch_id)
         expiry = datetime.now(timezone.utc) + timedelta(days=days_valid)
+        # Cap new_count to MAX_EXECUTIONS
+        capped_count = min(new_count, Config.MAX_EXECUTIONS)
         doc_ref.set({
             "user_id": user_id,
-            "new_count": new_count,
+            "new_count": capped_count,
             "expiry": expiry,
             "used": False
         })
-        st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, {new_count} executions)")
-        logging.info(f"Patch generated: {patch_id} for user {user_id}")
+        st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, {capped_count} executions)")
+        logging.info(f"Patch generated: {patch_id} for user {user_id}, capped_count={capped_count}")
         return patch_id
     except Exception as e:
         logging.error(f"Error generating patch for user {user_id}: {str(e)}\n{traceback.format_exc()}")
@@ -335,17 +337,21 @@ def validate_patch(patch_id, user_id):
         if data["user_id"] != user_id:
             st.error("Patch not valid for this user.")
             return False
+        # Cap new_count to MAX_EXECUTIONS
+        capped_count = min(data["new_count"], Config.MAX_EXECUTIONS)
         execution_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
         execution_ref.update({
-            "count": data["new_count"],
-            "expiry": expiry
+            "count": capped_count,
+            "expiry": expiry,
+            "last_updated": datetime.now(timezone.utc)
         })
         doc_ref.update({"used": True})
-        State.execution_count = data["new_count"]
+        State.execution_count = capped_count
         State.license_expiry = expiry
-        st.session_state.local_execution_count = data["new_count"] if hasattr(st.session_state, 'local_execution_count') else None
+        st.session_state.local_execution_count = capped_count if hasattr(st.session_state, 'local_execution_count') else None
+        st.session_state.patch_applied = True  # Flag to indicate patch was applied
         st.success("Patch applied successfully.")
-        logging.info(f"Patch applied: {patch_id} for user {user_id}, new_count={data['new_count']}")
+        logging.info(f"Patch applied: {patch_id} for user {user_id}, capped_count={capped_count}")
         return True
     except Exception as e:
         logging.error(f"Error validating patch {patch_id} for user {user_id}: {str(e)}\n{traceback.format_exc()}")
@@ -597,6 +603,7 @@ def main():
         st.session_state.download_all_trigger = False
         st.session_state.blur_enabled = False
         st.session_state.device_id = str(uuid.uuid4())
+        st.session_state.patch_applied = False
         logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
 
     logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
@@ -660,13 +667,17 @@ def main():
     logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
 
     # Check license early
-    if not check_license(st.session_state.user_id):
+    if not check_license(st.session_state.user_id) and not st.session_state.patch_applied:
         st.subheader("Apply Patch")
         patch_id = st.text_input("Enter Patch ID")
         if st.button("Apply Patch"):
             if validate_patch(patch_id, st.session_state.user_id):
                 st.rerun()
         return
+    elif st.session_state.patch_applied:
+        # Clear patch_applied flag after successful check
+        st.session_state.patch_applied = False
+        st.rerun()
 
     # Load DNN model
     if State.net is None:
@@ -839,6 +850,7 @@ def main():
         st.write(f"processed_files_data: {len(st.session_state.processed_files_data)} files")
         st.write(f"download_all_index: {st.session_state.download_all_index}")
         st.write(f"download_all_trigger: {st.session_state.download_all_trigger}")
+        st.write(f"patch_applied: {st.session_state.patch_applied}")
         st.write(f"State.execution_count: {State.execution_count}")
         st.write(f"State.license_expiry: {State.license_expiry}")
         logging.info(f"Debug output displayed for admin: user={st.session_state.user}")
@@ -847,7 +859,7 @@ def main():
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
         st.subheader("Admin: Generate Patch")
         target_user = st.text_input("Target User ID")
-        new_count = st.number_input("New Execution Count", min_value=0, value=0)
+        new_count = st.number_input("New Execution Count", min_value=0, max_value=Config.MAX_EXECUTIONS, value=0)
         days_valid = st.number_input("Days Valid", min_value=1, value=30)
         if st.button("Generate Patch"):
             patch_id = apply_patch(target_user, new_count, days_valid)
