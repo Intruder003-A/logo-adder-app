@@ -350,6 +350,7 @@ def get_user_logos(user_id):
     try:
         blobs = bucket.list_blobs(prefix=f"logos/{user_id}/")
         logos = [(blob.name, blob.generate_signed_url(timedelta(minutes=30))) for blob in blobs if blob.name.endswith('.png')]
+        logging.info(f"Retrieved {len(logos)} logos for user {user_id}")
         return logos
     except Exception as e:
         logging.error(f"Error retrieving logos for user {user_id}: {e}")
@@ -358,15 +359,18 @@ def get_user_logos(user_id):
 # Upload logo to Firebase Storage
 def upload_logo_to_storage(user_id, logo_file):
     try:
+        # Ensure file pointer is at the start
+        logo_file.seek(0)
         blob = bucket.blob(f"logos/{user_id}/{logo_file.name}")
         blob.upload_from_file(logo_file, content_type='image/png')
         logging.info(f"Uploaded logo {logo_file.name} for user {user_id}")
         return blob.name
     except Exception as e:
-        logging.error(f"Error uploading logo for user {user_id}: {e}")
+        logging.error(f"Error uploading logo for user {user_id}: {str(e)}")
+        st.error(f"Failed to upload logo to storage: {str(e)}")
         return None
 
-# Download logo from Firebase Procurement to local path
+# Download logo from Firebase Storage to local path
 def download_logo_from_storage(logo_path, local_path):
     try:
         blob = bucket.blob(logo_path)
@@ -375,6 +379,7 @@ def download_logo_from_storage(logo_path, local_path):
         return local_path
     except Exception as e:
         logging.error(f"Error downloading logo {logo_path}: {e}")
+        st.error(f"Failed to download logo: {str(e)}")
         return None
 
 # Verify user
@@ -506,7 +511,7 @@ def main():
                 st.session_state.selected_logo = logo_path
                 st.success(f"Logo {logo_file.name} uploaded and saved.")
             else:
-                st.error("Failed to upload logo to storage.")
+                st.error("Failed to upload logo to storage. Check Firebase Storage configuration.")
     else:
         # Use selected logo from Firebase Storage
         for logo_path, _ in st.session_state.user_logos:
@@ -527,6 +532,10 @@ def main():
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
     st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.get("blur_enabled", False))
 
+    # Update session state for media files
+    if media_files:
+        st.session_state.media_files = media_files
+
     # Logo position selection with styled buttons
     st.subheader("Logo Position")
     col1, col2, col3 = st.columns(3)
@@ -541,10 +550,6 @@ def main():
                 st.session_state.logo_position = pos
     st.write(f"Selected Logo Position: **{st.session_state.logo_position.capitalize()}**")
 
-    # Update session state for media files
-    if media_files:
-        st.session_state.media_files = media_files
-
     # Display existing logoed files
     if st.session_state.processed_files_data:
         st.subheader("Download Logoed Files")
@@ -554,7 +559,7 @@ def main():
                     label=f"Download {os.path.basename(file_path)}",
                     data=file_data,
                     file_name=os.path.basename(file_path),
-                    key=f"download_{uuid.uuid4()}",  # Unique key for each button
+                    key=f"download_{uuid.uuid4()}",
                     help=f"Download logoed file: {original_name}"
                 )
 
@@ -571,7 +576,8 @@ def main():
                     )
 
     # Start Logoing button
-    if st.session_state.logo_file and st.session_state.media_files:
+    # Simplified condition: Check if a logo is selected (either new or stored) and media files are uploaded
+    if (st.session_state.logo_file or st.session_state.selected_logo) and st.session_state.media_files:
         if st.button("Start Logoing"):
             # Clear previous logoed files
             st.session_state.logoed_files = []
@@ -648,6 +654,14 @@ def main():
                             key=f"download_all_{uuid.uuid4()}",
                             help=f"Downloading logoed file: {original_name}"
                         )
+
+    # Debug session state
+    if st.session_state.get("debug", False):
+        st.write("Debug Session State:")
+        st.write(f"logo_file: {st.session_state.logo_file}")
+        st.write(f"selected_logo: {st.session_state.selected_logo}")
+        st.write(f"media_files: {len(st.session_state.media_files)} files")
+        st.write(f"user_logos: {len(st.session_state.user_logos)} logos")
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
