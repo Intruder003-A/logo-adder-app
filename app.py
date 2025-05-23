@@ -174,6 +174,10 @@ def process_video(video_path, output_path, net, blur_enabled):
 
 # Check license and execution count
 def check_license(user_id):
+    if not user_id:
+        logging.error("No user_id provided for license check.")
+        st.error("User not authenticated. Please log in.")
+        return False
     try:
         doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{State.device_id}")
         doc = doc_ref.get()
@@ -204,6 +208,10 @@ def check_license(user_id):
 
 # Increment execution count
 def increment_execution(user_id):
+    if not user_id:
+        logging.warning("No user_id for execution count increment. Skipping Firestore update.")
+        State.execution_count += 1
+        return
     try:
         doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{State.device_id}")
         State.execution_count += 1
@@ -355,9 +363,12 @@ def verify_user(email, password):
         response.raise_for_status()
         data = response.json()
         if "idToken" in data:
-            return data.get("localId"), None
+            user_id = data.get("localId")
+            logging.info(f"User authenticated: {user_id}")
+            return user_id, None
         else:
             error_message = data.get("error", {}).get("message", "Invalid credentials")
+            logging.error(f"Authentication failed: {error_message}")
             if "EMAIL_NOT_FOUND" in error_message:
                 return None, "Email not registered."
             elif "INVALID_PASSWORD" in error_message:
@@ -365,6 +376,7 @@ def verify_user(email, password):
             else:
                 return None, error_message
     except requests.exceptions.RequestException as e:
+        logging.error(f"Error verifying credentials: {str(e)}")
         return None, f"Error verifying credentials: {str(e)}"
 
 # Streamlit app
@@ -411,6 +423,7 @@ def main():
         st.session_state.logo_file = None
         st.session_state.media_files = []
         st.session_state.processed_files_data = []  # Store file data for persistence
+        st.session_state.download_all_index = None  # Track download all progress
 
     if not st.session_state.user:
         st.subheader("Login")
@@ -514,33 +527,40 @@ def main():
     # Display existing logoed files
     if st.session_state.processed_files_data:
         st.subheader("Download Logoed Files")
-        download_button_ids = []
         for file_path, original_name, file_data in st.session_state.processed_files_data:
             if os.path.exists(file_path):
-                button_id = f"download_{uuid.uuid4()}"
-                download_button_ids.append(button_id)
                 st.download_button(
                     label=f"Download {os.path.basename(file_path)}",
                     data=file_data,
                     file_name=os.path.basename(file_path),
-                    key=button_id,
+                    key=f"download_{uuid.uuid4()}",
                     help=f"Download logoed file: {original_name}"
                 )
 
         # Download all files button
         if len(st.session_state.processed_files_data) > 1:
-            # JavaScript to trigger all download buttons
-            download_all_js = """
-            <script>
-            function triggerAllDownloads() {
-                %s
-            }
-            </script>
-            """ % ";".join([f"document.getElementById('{button_id}').click()" for button_id in download_button_ids])
-            st.markdown(download_all_js, unsafe_allow_html=True)
-            
-            # Green Download All button
-            st.button("Download All Files", key="download_all", on_click=lambda: None, help="Download all logoed files")
+            st.warning("Please allow multiple downloads in your browser if prompted.")
+            if st.button("Download All Files", key="download_all", help="Download all logoed files"):
+                st.session_state.download_all_index = 0  # Start downloading from the first file
+                st.rerun()
+
+    # Handle Download All Files
+    if st.session_state.get("download_all_index") is not None and st.session_state.processed_files_data:
+        index = st.session_state.download_all_index
+        if index < len(st.session_state.processed_files_data):
+            file_path, original_name, file_data = st.session_state.processed_files_data[index]
+            logging.info(f"Triggering download for file {index + 1}/{len(st.session_state.processed_files_data)}: {os.path.basename(file_path)}")
+            st.download_button(
+                label=f"Downloading {os.path.basename(file_path)}",
+                data=file_data,
+                file_name=os.path.basename(file_path),
+                key=f"download_all_{index}",
+                help=f"Downloading logoed file: {original_name}"
+            )
+            st.session_state.download_all_index += 1
+            st.rerun()
+        else:
+            st.session_state.download_all_index = None  # Reset after all files are downloaded
 
     # Start Logoing button
     if st.session_state.logo_file and st.session_state.media_files:
@@ -548,6 +568,7 @@ def main():
             # Clear previous logoed files
             st.session_state.logoed_files = []
             st.session_state.processed_files_data = []
+            st.session_state.download_all_index = None  # Reset download all state
             
             logo_path = os.path.join(base_path, "Logos", st.session_state.logo_file.name)
             if not os.path.exists(logo_path):
@@ -590,6 +611,7 @@ def main():
                     increment_execution(State.user_id)
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {e}")
+                    logging.error(f"Error processing {media_file.name}: {e}")
                 finally:
                     if os.path.exists(intermediate_path):
                         os.remove(intermediate_path)
@@ -600,29 +622,29 @@ def main():
 
             # Display download buttons for new files
             st.subheader("Download Logoed Files")
-            download_button_ids = []
             for file_path, original_name, file_data in st.session_state.processed_files_data:
-                button_id = f"download_{uuid.uuid4()}"
-                download_button_ids.append(button_id)
                 st.download_button(
                     label=f"Download {os.path.basename(file_path)}",
                     data=file_data,
                     file_name=os.path.basename(file_path),
-                    key=button_id,
+                    key=f"download_{uuid.uuid4()}",
                     help=f"Download logoed file: {original_name}"
                 )
 
             # Download all files button
             if len(st.session_state.processed_files_data) > 1:
-                download_all_js = """
-                <script>
-                function triggerAllDownloads() {
-                    %s
-                }
-                </script>
-                """ % ";".join([f"document.getElementById('{button_id}').click()" for button_id in download_button_ids])
-                st.markdown(download_all_js, unsafe_allow_html=True)
-                st.button("Download All Files", key="download_all", on_click=lambda: None, help="Download all logoed files")
+                st.warning("Please allow multiple downloads in your browser if prompted.")
+                st.button("Download All Files", key="download_all", help="Download all logoed files")
+
+    # Debug session state
+    st.session_state.debug = True
+    if st.session_state.get("debug", False):
+        st.write("Debug Session State:")
+        st.write(f"user: {st.session_state.user}")
+        st.write(f"logo_file: {st.session_state.logo_file}")
+        st.write(f"media_files: {len(st.session_state.media_files)} files")
+        st.write(f"processed_files_data: {len(st.session_state.processed_files_data)} files")
+        st.write(f"download_all_index: {st.session_state.download_all_index}")
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
