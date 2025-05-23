@@ -1,7 +1,7 @@
 import os
 import streamlit as st
 import firebase_admin
-from firebase_admin import credentials, firestore, auth
+from firebase_admin import credentials, firestore, auth, storage
 from PIL import Image
 import numpy as np
 from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
@@ -12,7 +12,7 @@ import shutil
 import requests
 import json
 import cv2
-import base64
+import io
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,8 +26,11 @@ if not firebase_admin._apps:
     except (KeyError, ValueError, json.JSONDecodeError) as e:
         logging.warning(f"Failed to load credentials from st.secrets: {str(e)}. Falling back to local file.")
         cred = credentials.Certificate("logoadder-d22b5-firebase-adminsdk.json")
-    firebase_admin.initialize_app(cred)
+    firebase_admin.initialize_app(cred, {
+        'storageBucket': 'logoadder-d22b5.appspot.com'  # Replace with your Firebase Storage bucket
+    })
 db = firestore.client()
+bucket = storage.bucket()
 
 # Firebase Web API Key
 try:
@@ -342,30 +345,37 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         logging.error("Error processing video: %s", e)
         raise
 
-# JavaScript to trigger multiple downloads
-def trigger_multiple_downloads(files):
-    js_code = """
-    <script>
-        function downloadFiles(files) {
-            files.forEach(file => {
-                const link = document.createElement('a');
-                link.href = file.url;
-                link.download = file.name;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            });
-        }
-    </script>
-    """
-    files_json = json.dumps([{
-        "url": f"data:application/octet-stream;base64,{base64.b64encode(open(file_path, 'rb').read()).decode('utf-8')}",
-        "name": os.path.basename(file_path)
-    } for file_path, _ in files])
-    st.markdown(js_code, unsafe_allow_html=True)
-    st.markdown(f"""
-    <button onclick='downloadFiles({files_json})'>Download All Files</button>
-    """, unsafe_allow_html=True)
+# Retrieve user's logos from Firebase Storage
+def get_user_logos(user_id):
+    try:
+        blobs = bucket.list_blobs(prefix=f"logos/{user_id}/")
+        logos = [(blob.name, blob.generate_signed_url(timedelta(minutes=30))) for blob in blobs if blob.name.endswith('.png')]
+        return logos
+    except Exception as e:
+        logging.error(f"Error retrieving logos for user {user_id}: {e}")
+        return []
+
+# Upload logo to Firebase Storage
+def upload_logo_to_storage(user_id, logo_file):
+    try:
+        blob = bucket.blob(f"logos/{user_id}/{logo_file.name}")
+        blob.upload_from_file(logo_file, content_type='image/png')
+        logging.info(f"Uploaded logo {logo_file.name} for user {user_id}")
+        return blob.name
+    except Exception as e:
+        logging.error(f"Error uploading logo for user {user_id}: {e}")
+        return None
+
+# Download logo from Firebase Procurement to local path
+def download_logo_from_storage(logo_path, local_path):
+    try:
+        blob = bucket.blob(logo_path)
+        blob.download_to_filename(local_path)
+        logging.info(f"Downloaded logo {logo_path} to {local_path}")
+        return local_path
+    except Exception as e:
+        logging.error(f"Error downloading logo {logo_path}: {e}")
+        return None
 
 # Verify user
 def verify_user(email, password):
@@ -403,6 +413,11 @@ def main():
         st.session_state.reset_message = None
         st.session_state.logo_position = "center"
         st.session_state.logoed_files = []
+        st.session_state.selected_logo = None
+        st.session_state.user_logos = []
+        st.session_state.logo_file = None
+        st.session_state.media_files = []
+        st.session_state.processed_files_data = []  # Store file data for persistence
 
     if not st.session_state.user:
         st.subheader("Login")
@@ -421,6 +436,7 @@ def main():
                         State.user_id = uid
                         st.session_state.auth_error = None
                         st.session_state.reset_message = None
+                        st.session_state.user_logos = get_user_logos(uid)
                         st.success("Logged in successfully.")
                         st.rerun()
                     else:
@@ -470,14 +486,44 @@ def main():
     base_path = "temp_files"
     ensure_directories(base_path)
 
-    # Initialize session state
-    if "logo_file" not in st.session_state:
-        st.session_state.logo_file = None
-    if "media_files" not in st.session_state:
-        st.session_state.media_files = []
+    # Logo selection or upload
+    st.subheader("Select or Upload Logo")
+    logo_options = ["Upload New Logo"] + [os.path.basename(logo_path) for logo_path, _ in st.session_state.user_logos]
+    selected_logo = st.selectbox("Choose a logo", logo_options, key="logo_select")
+    
+    if selected_logo == "Upload New Logo":
+        logo_file = st.file_uploader("Upload Logo (PNG)", type=["png"], key="logo")
+        if logo_file:
+            # Save to local temp and upload to Firebase Storage
+            temp_logo_path = os.path.join(base_path, "Logos", logo_file.name)
+            with open(temp_logo_path, "wb") as f:
+                f.write(logo_file.getbuffer())
+            logo_file.seek(0)  # Reset file pointer for upload
+            logo_path = upload_logo_to_storage(State.user_id, logo_file)
+            if logo_path:
+                st.session_state.user_logos.append((logo_path, None))
+                st.session_state.logo_file = logo_file
+                st.session_state.selected_logo = logo_path
+                st.success(f"Logo {logo_file.name} uploaded and saved.")
+            else:
+                st.error("Failed to upload logo to storage.")
+    else:
+        # Use selected logo from Firebase Storage
+        for logo_path, _ in st.session_state.user_logos:
+            if os.path.basename(logo_path) == selected_logo:
+                st.session_state.selected_logo = logo_path
+                # Download logo to local temp for processing
+                local_logo_path = os.path.join(base_path, "Logos", selected_logo)
+                if download_logo_from_storage(logo_path, local_logo_path):
+                    st.session_state.logo_file = type('obj', (object,), {
+                        'name': selected_logo,
+                        'getbuffer': lambda: open(local_logo_path, 'rb').read()
+                    })
+                else:
+                    st.error("Failed to download selected logo.")
+                break
 
-    # File upload
-    logo_file = st.file_uploader("Upload Logo (PNG)", type=["png"], key="logo")
+    # Media file upload
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
     st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.get("blur_enabled", False))
 
@@ -495,18 +541,46 @@ def main():
                 st.session_state.logo_position = pos
     st.write(f"Selected Logo Position: **{st.session_state.logo_position.capitalize()}**")
 
-    # Update session state
-    if logo_file:
-        st.session_state.logo_file = logo_file
+    # Update session state for media files
     if media_files:
         st.session_state.media_files = media_files
+
+    # Display existing logoed files
+    if st.session_state.processed_files_data:
+        st.subheader("Download Logoed Files")
+        for file_path, original_name, file_data in st.session_state.processed_files_data:
+            if os.path.exists(file_path):
+                st.download_button(
+                    label=f"Download {os.path.basename(file_path)}",
+                    data=file_data,
+                    file_name=os.path.basename(file_path),
+                    key=f"download_{uuid.uuid4()}",  # Unique key for each button
+                    help=f"Download logoed file: {original_name}"
+                )
+
+        # Download all files button
+        if len(st.session_state.processed_files_data) > 1:
+            if st.button("Download All Files", key="download_all"):
+                for file_path, original_name, file_data in st.session_state.processed_files_data:
+                    st.download_button(
+                        label=f"Downloading {os.path.basename(file_path)}",
+                        data=file_data,
+                        file_name=os.path.basename(file_path),
+                        key=f"download_all_{uuid.uuid4()}",
+                        help=f"Downloading logoed file: {original_name}"
+                    )
 
     # Start Logoing button
     if st.session_state.logo_file and st.session_state.media_files:
         if st.button("Start Logoing"):
+            # Clear previous logoed files
+            st.session_state.logoed_files = []
+            st.session_state.processed_files_data = []
+            
             logo_path = os.path.join(base_path, "Logos", st.session_state.logo_file.name)
-            with open(logo_path, "wb") as f:
-                f.write(st.session_state.logo_file.getbuffer())
+            if not os.path.exists(logo_path):
+                with open(logo_path, "wb") as f:
+                    f.write(st.session_state.logo_file.getbuffer())
             
             processed_files = []
             
@@ -533,10 +607,14 @@ def main():
                         image = Image.open(intermediate_path).convert("RGBA")
                         output_image = overlay_logo_on_image(image, logo_path, st.session_state.logo_position)
                         output_image.save(output_path, "PNG")
-                        processed_files.append((output_path, media_file.name))
+                        with open(output_path, "rb") as f:
+                            file_data = f.read()
+                        processed_files.append((output_path, media_file.name, file_data))
                     else:
                         overlay_logo_on_video(intermediate_path, logo_path, output_path, st.session_state.logo_position)
-                        processed_files.append((output_path, media_file.name))
+                        with open(output_path, "rb") as f:
+                            file_data = f.read()
+                        processed_files.append((output_path, media_file.name, file_data))
                     increment_execution(State.user_id)
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {e}")
@@ -545,24 +623,31 @@ def main():
                         os.remove(intermediate_path)
 
             # Store processed files in session state
-            st.session_state.logoed_files.extend(processed_files)
+            st.session_state.logoed_files = [(file_path, original_name) for file_path, original_name, _ in processed_files]
+            st.session_state.processed_files_data = processed_files
 
-            # Display download buttons for individual files
+            # Display download buttons for new files
             st.subheader("Download Logoed Files")
-            for file_path, original_name in st.session_state.logoed_files:
-                if os.path.exists(file_path):
-                    with open(file_path, "rb") as f:
-                        st.download_button(
-                            label=f"Download {os.path.basename(file_path)}",
-                            data=f,
-                            file_name=os.path.basename(file_path),
-                            key=f"download_{uuid.uuid4()}",  # Unique key for each button
-                            help=f"Download logoed file: {original_name}"
-                        )
+            for file_path, original_name, file_data in st.session_state.processed_files_data:
+                st.download_button(
+                    label=f"Download {os.path.basename(file_path)}",
+                    data=file_data,
+                    file_name=os.path.basename(file_path),
+                    key=f"download_{uuid.uuid4()}",
+                    help=f"Download logoed file: {original_name}"
+                )
 
             # Download all files button
-            if st.session_state.logoed_files:
-                trigger_multiple_downloads(st.session_state.logoed_files)
+            if len(st.session_state.processed_files_data) > 1:
+                if st.button("Download All Files", key="download_all_new"):
+                    for file_path, original_name, file_data in st.session_state.processed_files_data:
+                        st.download_button(
+                            label=f"Downloading {os.path.basename(file_path)}",
+                            data=file_data,
+                            file_name=os.path.basename(file_path),
+                            key=f"download_all_{uuid.uuid4()}",
+                            help=f"Downloading logoed file: {original_name}"
+                        )
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
