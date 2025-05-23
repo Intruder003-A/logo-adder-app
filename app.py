@@ -19,6 +19,8 @@ import base64
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize Firebase Admin SDK
+# Note: Firebase Dynamic Links shutdown on August 25, 2025, affects email link authentication for mobile apps and Cordova OAuth for web apps.
+# Current email/password authentication is unaffected. Monitor https://firebase.google.com/support/dynamic-links-faq for updates.
 if not firebase_admin._apps:
     try:
         firebase_credentials = st.secrets["firebase"]["credential"]
@@ -366,7 +368,7 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         logging.error("Error processing video: %s", e)
         raise
 
-# JavaScript-based download (from previous code, optional)
+# JavaScript-based download (optional)
 def trigger_multiple_downloads(files):
     js_code = """
     <style>
@@ -397,9 +399,9 @@ def trigger_multiple_downloads(files):
     </script>
     """
     files_json = json.dumps([{
-        "url": f"data:application/octet-stream;base64,{base64.b64encode(open(file_path, 'rb').read()).decode('utf-8')}",
+        "url": f"data:application/octet-stream;base64,{base64.b64encode(file_data).decode('utf-8')}",
         "name": os.path.basename(file_path)
-    } for file_path, _, _ in files])
+    } for file_path, _, file_data in files])
     st.markdown(js_code, unsafe_allow_html=True)
     st.markdown(f"""
     <button class="download-all-btn" onclick='downloadFiles({files_json})'>Download All Files</button>
@@ -456,7 +458,7 @@ def main():
         div.stButton > button[kind="primary"][id="start_logoing"]:hover {
             background-color: #0056b3;
         }
-        div.stButton > button[id="download_all"] {
+        div.stButton > button[id^="download_all_btn"] {
             background-color: #4CAF50;
             color: white;
             padding: 10px 20px;
@@ -465,7 +467,7 @@ def main():
             cursor: pointer;
             font-size: 16px;
         }
-        div.stButton > button[id="download_all"]:hover {
+        div.stButton > button[id^="download_all_btn"]:hover {
             background-color: #45a049;
         }
         </style>
@@ -621,13 +623,13 @@ def main():
             if Config.USE_JAVASCRIPT_DOWNLOAD:
                 trigger_multiple_downloads(st.session_state.processed_files_data)
             else:
-                if st.button("Download All Files", key="download_all", help="Download all logoed files"):
+                if st.button("Download All Files", key=f"download_all_btn_{uuid.uuid4()}", help="Download all logoed files"):
                     st.session_state.download_all_index = 0
                     logging.info("Download All Files initiated")
                     st.rerun()
 
     # Handle Download All Files (sequential)
-    if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.get("download_all_index") is not None and st.session_state.processed_files_data:
+    if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.download_all_index is not None and st.session_state.processed_files_data:
         index = st.session_state.download_all_index
         if index < len(st.session_state.processed_files_data):
             file_path, original_name, file_data = st.session_state.processed_files_data[index]
@@ -636,14 +638,16 @@ def main():
                 label=f"Downloading {os.path.basename(file_path)}",
                 data=file_data,
                 file_name=os.path.basename(file_path),
-                key=f"download_all_{index}",
+                key=f"download_all_{index}_{uuid.uuid4()}",
                 help=f"Downloading logoed file: {original_name}"
             )
             st.session_state.download_all_index += 1
+            logging.info(f"Updated download_all_index to {st.session_state.download_all_index}")
             st.rerun()
         else:
             st.session_state.download_all_index = None
             logging.info("Download All Files completed")
+            st.success("All files downloaded successfully.")
 
     # Start Logoing button
     if st.session_state.logo_file and st.session_state.media_files:
@@ -719,7 +723,7 @@ def main():
                 if Config.USE_JAVASCRIPT_DOWNLOAD:
                     trigger_multiple_downloads(st.session_state.processed_files_data)
                 else:
-                    st.button("Download All Files", key="download_all", help="Download all logoed files")
+                    st.button("Download All Files", key=f"download_all_btn_{uuid.uuid4()}", help="Download all logoed files")
 
     # Debug session state
     st.session_state.debug = True
