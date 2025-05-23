@@ -14,7 +14,6 @@ import json
 import cv2
 import io
 import base64
-from google.cloud.exceptions import PermissionDenied
 import traceback
 
 # Setup logging
@@ -243,13 +242,13 @@ def check_license(user_id):
             st.error("Execution limit reached. Contact the service team for a new patch.")
             return False
         return True
-    except PermissionDenied as e:
-        logging.error(f"Firestore permission denied for user {user_id}: {str(e)}\n{traceback.format_exc()}")
-        st.error("Firestore access denied. Check Firebase security rules or contact support.")
-        return False
     except Exception as e:
-        logging.error(f"License check failed for user {user_id}: {str(e)}\n{traceback.format_exc()}")
-        st.error(f"Error checking license: {str(e)}. Contact the service team.")
+        if "PERMISSION_DENIED" in str(e).upper():
+            logging.error(f"Firestore permission denied for user {user_id}: {str(e)}\n{traceback.format_exc()}")
+            st.error("Firestore access denied. Check Firebase security rules or contact support.")
+        else:
+            logging.error(f"License check failed for user {user_id}: {str(e)}\n{traceback.format_exc()}")
+            st.error(f"Error checking license: {str(e)}. Contact the service team.")
         return False
 
 # Increment execution count
@@ -271,12 +270,13 @@ def increment_execution(user_id, file_name):
         State.execution_count += 1
         doc_ref.update({"count": State.execution_count})
         logging.info(f"Execution count updated to {State.execution_count} for user {user_id}, file {file_name}")
-    except PermissionDenied as e:
-        logging.error(f"Firestore permission denied incrementing count for user {user_id}, file {file_name}: {str(e)}\n{traceback.format_exc()}")
-        st.error("Firestore access denied. Contact support.")
     except Exception as e:
-        logging.error(f"Error incrementing execution count for user {user_id}, file {file_name}: {str(e)}\n{traceback.format_exc()}")
-        st.error(f"Error updating execution count for {file_name}. Contact support.")
+        if "PERMISSION_DENIED" in str(e).upper():
+            logging.error(f"Firestore permission denied incrementing count for user {user_id}, file {file_name}: {str(e)}\n{traceback.format_exc()}")
+            st.error("Firestore access denied. Contact support.")
+        else:
+            logging.error(f"Error incrementing execution count for user {user_id}, file {file_name}: {str(e)}\n{traceback.format_exc()}")
+            st.error(f"Error updating execution count for {file_name}. Contact support.")
 
 # Apply patch (admin function)
 def apply_patch(user_id, new_count, days_valid):
