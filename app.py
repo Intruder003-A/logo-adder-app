@@ -58,7 +58,6 @@ class State:
     license_expiry = None
     device_id = str(uuid.uuid4())
     net = None
-    logoed_files = []  # Store paths of logoed files
 
 # Ensure directories exist
 def ensure_directories(base_path):
@@ -393,6 +392,7 @@ def main():
         st.session_state.auth_error = None
         st.session_state.reset_message = None
         st.session_state.logo_position = "center"
+        st.session_state.logoed_files = []
 
     if not st.session_state.user:
         st.subheader("Login")
@@ -465,29 +465,25 @@ def main():
         st.session_state.logo_file = None
     if "media_files" not in st.session_state:
         st.session_state.media_files = []
-    if "blur_enabled" not in st.session_state:
-        st.session_state.blur_enabled = False
-    if "logoed_files" not in st.session_state:
-        st.session_state.logoed_files = []
 
     # File upload
     logo_file = st.file_uploader("Upload Logo (PNG)", type=["png"], key="logo")
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
-    st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.blur_enabled)
+    st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.get("blur_enabled", False))
 
-    # Logo position selection
+    # Logo position selection with styled buttons
     st.subheader("Logo Position")
     col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("Top"):
-            st.session_state.logo_position = "top"
-    with col2:
-        if st.button("Center"):
-            st.session_state.logo_position = "center"
-    with col3:
-        if st.button("Bottom"):
-            st.session_state.logo_position = "bottom"
-    st.write(f"Selected Logo Position: {st.session_state.logo_position.capitalize()}")
+    positions = ["top", "center", "bottom"]
+    
+    for col, pos in zip([col1, col2, col3], positions):
+        with col:
+            button_style = "background-color: #4CAF50; color: white; padding: 10px; border-radius: 5px; border: none; cursor: pointer;"
+            if st.session_state.logo_position == pos:
+                button_style = "background-color: #45a049; color: white; padding: 10px; border-radius: 5px; border: 2px solid #000;"
+            if st.button(pos.capitalize(), key=f"pos_{pos}", help=f"Place logo at {pos}"):
+                st.session_state.logo_position = pos
+    st.write(f"Selected Logo Position: **{st.session_state.logo_position.capitalize()}**")
 
     # Update session state
     if logo_file:
@@ -502,7 +498,7 @@ def main():
             with open(logo_path, "wb") as f:
                 f.write(st.session_state.logo_file.getbuffer())
             
-            st.session_state.logoed_files = []  # Reset logoed files list
+            processed_files = []
             
             for media_file in st.session_state.media_files:
                 media_path = os.path.join(base_path, "Media", media_file.name)
@@ -527,10 +523,10 @@ def main():
                         image = Image.open(intermediate_path).convert("RGBA")
                         output_image = overlay_logo_on_image(image, logo_path, st.session_state.logo_position)
                         output_image.save(output_path, "PNG")
-                        st.session_state.logoed_files.append(output_path)
+                        processed_files.append((output_path, media_file.name))
                     else:
                         overlay_logo_on_video(intermediate_path, logo_path, output_path, st.session_state.logo_position)
-                        st.session_state.logoed_files.append(output_path)
+                        processed_files.append((output_path, media_file.name))
                     increment_execution(State.user_id)
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {e}")
@@ -538,36 +534,40 @@ def main():
                     if os.path.exists(intermediate_path):
                         os.remove(intermediate_path)
 
+            # Store processed files in session state
+            st.session_state.logoed_files.extend(processed_files)
+
             # Display download buttons for individual files
             st.subheader("Download Logoed Files")
-            for file_path in st.session_state.logoed_files:
+            for file_path, original_name in st.session_state.logoed_files:
                 if os.path.exists(file_path):
                     with open(file_path, "rb") as f:
                         st.download_button(
                             label=f"Download {os.path.basename(file_path)}",
                             data=f,
                             file_name=os.path.basename(file_path),
-                            key=f"download_{os.path.basename(file_path)}"
+                            key=f"download_{uuid.uuid4()}",  # Unique key for each button
+                            help=f"Download logoed file: {original_name}"
                         )
 
             # Download all as ZIP
             if st.session_state.logoed_files:
-                zip_buffer = create_zip_file(st.session_state.logoed_files)
+                zip_buffer = create_zip_file([file_path for file_path, _ in st.session_state.logoed_files])
                 if zip_buffer:
                     st.download_button(
                         label="Download All as ZIP",
                         data=zip_buffer,
                         file_name=f"logoed_files_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip",
                         mime="application/zip",
-                        key="download_all_zip"
+                        key=f"zip_download_{uuid.uuid4()}"
                     )
 
-            # Clean up
-            shutil.rmtree(base_path)
-            ensure_directories(base_path)
-            st.session_state.logo_file = None
-            st.session_state.media_files = []
-            st.session_state.logoed_files = []
+            # Clean up (but keep files for download persistence)
+            # shutil.rmtree(base_path)
+            # ensure_directories(base_path)
+            # st.session_state.logo_file = None
+            # st.session_state.media_files = []
+            # st.session_state.logoed_files = []
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
