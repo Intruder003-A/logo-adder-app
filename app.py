@@ -67,7 +67,7 @@ class Config:
     BLUR_KERNEL = (101, 101)
     CONFIDENCE_THRESHOLD = 0.2
     LOGO_OFFSET_PERCENT = 0.1
-    USE_JAVASCRIPT_DOWNLOAD = False  # Set to True to use JavaScript-based download (previous code)
+    USE_JAVASCRIPT_DOWNLOAD = False  # Set to True to use JavaScript-based download
 
 # State management
 class State:
@@ -252,6 +252,7 @@ def apply_patch(user_id, new_count, days_valid):
             "used": False
         })
         st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, {new_count} executions)")
+        logging.info(f"Patch generated: {patch_id} for user {user_id}")
         return patch_id
     except Exception as e:
         logging.error("Error generating patch: %s", e)
@@ -285,6 +286,7 @@ def validate_patch(patch_id, user_id):
         State.execution_count = data["new_count"]
         State.license_expiry = data["expiry"]
         st.success("Patch applied successfully.")
+        logging.info(f"Patch applied: {patch_id} for user {user_id}")
         return True
     except Exception as e:
         logging.error("Error validating patch: %s", e)
@@ -439,6 +441,32 @@ def verify_user(email, password):
         logging.error(f"Error verifying credentials: {str(e)}")
         return None, f"Error verifying credentials: {str(e)}"
 
+# Debug tool to simulate license limits (admin only)
+def debug_license_limits(user_id):
+    if not user_id:
+        st.error("No user_id for debug license limits.")
+        return
+    try:
+        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{State.device_id}")
+        st.subheader("Debug License Limits")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Set Execution Count to 27"):
+                doc_ref.update({"count": Config.MAX_EXECUTIONS})
+                State.execution_count = Config.MAX_EXECUTIONS
+                st.success("Execution count set to 27. Reload to test limit.")
+                logging.info(f"Debug: Set execution count to {Config.MAX_EXECUTIONS} for user {user_id}")
+        with col2:
+            if st.button("Set Expiry to Past"):
+                past_expiry = datetime.now() - timedelta(days=1)
+                doc_ref.update({"expiry": past_expiry})
+                State.license_expiry = past_expiry
+                st.success("Expiry set to yesterday. Reload to test expiry.")
+                logging.info(f"Debug: Set expiry to {past_expiry} for user {user_id}")
+    except Exception as e:
+        logging.error(f"Error in debug license limits: {str(e)}")
+        st.error("Error updating license limits.")
+
 # Streamlit app
 def main():
     st.title("Logo Adder App")
@@ -485,6 +513,7 @@ def main():
         st.session_state.media_files = []
         st.session_state.processed_files_data = []
         st.session_state.download_all_index = None
+        st.session_state.download_all_trigger = False
         st.session_state.blur_enabled = False
 
     # Debug session state at start
@@ -567,6 +596,10 @@ def main():
         if State.net is None:
             st.warning("Face detection model failed to load. Blurring functionality will be disabled.")
 
+    # Admin debug tools
+    if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
+        debug_license_limits(st.session_state.user_id)
+
     # File upload and processing
     st.subheader("Upload Files")
     base_path = "temp_files"
@@ -623,15 +656,22 @@ def main():
             if Config.USE_JAVASCRIPT_DOWNLOAD:
                 trigger_multiple_downloads(st.session_state.processed_files_data)
             else:
-                if st.button("Download All Files", key=f"download_all_btn_{uuid.uuid4()}", help="Download all logoed files"):
+                unique_key = f"download_all_btn_{uuid.uuid4()}"
+                if st.button("Download All Files", key=unique_key, help="Download all logoed files"):
+                    st.session_state.download_all_trigger = True
                     st.session_state.download_all_index = 0
                     logging.info("Download All Files initiated")
                     st.rerun()
 
     # Handle Download All Files (sequential)
-    if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.download_all_index is not None and st.session_state.processed_files_data:
+    if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.download_all_trigger and st.session_state.processed_files_data:
         index = st.session_state.download_all_index
-        if index < len(st.session_state.processed_files_data):
+        if index is None or index >= len(st.session_state.processed_files_data):
+            st.session_state.download_all_trigger = False
+            st.session_state.download_all_index = None
+            logging.info("Download All Files completed")
+            st.success("All files downloaded successfully.")
+        else:
             file_path, original_name, file_data = st.session_state.processed_files_data[index]
             logging.info(f"Triggering download for file {index + 1}/{len(st.session_state.processed_files_data)}: {os.path.basename(file_path)}")
             st.download_button(
@@ -644,10 +684,6 @@ def main():
             st.session_state.download_all_index += 1
             logging.info(f"Updated download_all_index to {st.session_state.download_all_index}")
             st.rerun()
-        else:
-            st.session_state.download_all_index = None
-            logging.info("Download All Files completed")
-            st.success("All files downloaded successfully.")
 
     # Start Logoing button
     if st.session_state.logo_file and st.session_state.media_files:
@@ -655,6 +691,7 @@ def main():
             st.session_state.logoed_files = []
             st.session_state.processed_files_data = []
             st.session_state.download_all_index = None
+            st.session_state.download_all_trigger = False
             
             logo_path = os.path.join(base_path, "Logos", st.session_state.logo_file.name)
             if not os.path.exists(logo_path):
@@ -725,7 +762,20 @@ def main():
                 else:
                     st.button("Download All Files", key=f"download_all_btn_{uuid.uuid4()}", help="Download all logoed files")
 
-   
+    # Debug session state (admin only)
+    if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
+        st.subheader("Debug Session State")
+        st.write(f"user: {st.session_state.user}")
+        st.write(f"user_id: {st.session_state.user_id}")
+        st.write(f"auth_error: {st.session_state.auth_error}")
+        st.write(f"logo_file: {st.session_state.logo_file}")
+        st.write(f"media_files: {len(st.session_state.media_files)} files")
+        st.write(f"processed_files_data: {len(st.session_state.processed_files_data)} files")
+        st.write(f"download_all_index: {st.session_state.download_all_index}")
+        st.write(f"download_all_trigger: {st.session_state.download_all_trigger}")
+        st.write(f"State.execution_count: {State.execution_count}")
+        st.write(f"State.license_expiry: {State.license_expiry}")
+        logging.info(f"Debug output displayed for admin: user={st.session_state.user}")
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
