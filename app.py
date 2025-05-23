@@ -19,8 +19,6 @@ import base64
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize Firebase Admin SDK
-# Note: Firebase Dynamic Links shutdown on August 25, 2025, affects email link authentication for mobile apps and Cordova OAuth for web apps.
-# Current email/password authentication is unaffected. Monitor https://firebase.google.com/support/dynamic-links-faq for updates.
 if not firebase_admin._apps:
     try:
         firebase_credentials = st.secrets["firebase"]["credential"]
@@ -67,13 +65,12 @@ class Config:
     BLUR_KERNEL = (101, 101)
     CONFIDENCE_THRESHOLD = 0.2
     LOGO_OFFSET_PERCENT = 0.1
-    USE_JAVASCRIPT_DOWNLOAD = False  # Set to True to use JavaScript-based download
+    USE_JAVASCRIPT_DOWNLOAD = False
 
 # State management
 class State:
     execution_count = 0
     license_expiry = None
-    device_id = str(uuid.uuid4())
     net = None
 
 # Ensure directories exist
@@ -197,21 +194,23 @@ def check_license(user_id):
         st.error("User not authenticated. Please log in.")
         return False
     try:
-        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{State.device_id}")
+        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{st.session_state.device_id}")
         doc = doc_ref.get()
         if doc.exists:
             data = doc.to_dict()
             State.execution_count = data.get("count", 0)
             State.license_expiry = data.get("expiry", datetime.now())
+            logging.info(f"License checked for user {user_id}: count={State.execution_count}, expiry={State.license_expiry}")
         else:
             State.execution_count = 0
             State.license_expiry = datetime.now() + timedelta(days=30)
             doc_ref.set({
                 "user_id": user_id,
-                "device_id": State.device_id,
+                "device_id": st.session_state.device_id,
                 "count": State.execution_count,
                 "expiry": State.license_expiry
             })
+            logging.info(f"New license created for user {user_id}: count=0, expiry={State.license_expiry}")
         if datetime.now() > State.license_expiry:
             st.error("License expired. Contact the service team for a new patch.")
             return False
@@ -220,23 +219,24 @@ def check_license(user_id):
             return False
         return True
     except Exception as e:
-        logging.error("License check failed: %s", e)
+        logging.error(f"License check failed for user {user_id}: {str(e)}")
         st.error("Error checking license. Contact the service team.")
         return False
 
 # Increment execution count
-def increment_execution(user_id):
+def increment_execution(user_id, file_name):
     if not user_id:
-        logging.warning("No user_id for execution count increment. Skipping Firestore update.")
+        logging.warning(f"No user_id for execution count increment for file {file_name}. Skipping Firestore update.")
         State.execution_count += 1
         return
     try:
-        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{State.device_id}")
+        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{st.session_state.device_id}")
         State.execution_count += 1
         doc_ref.update({"count": State.execution_count})
-        logging.info("Execution count updated to %d for user %s", State.execution_count, user_id)
+        logging.info(f"Execution count updated to {State.execution_count} for user {user_id}, file {file_name}")
     except Exception as e:
-        logging.error("Error incrementing execution count: %s", e)
+        logging.error(f"Error incrementing execution count for user {user_id}, file {file_name}: {str(e)}")
+        st.error(f"Error updating execution count for {file_name}. Contact support.")
 
 # Apply patch (admin function)
 def apply_patch(user_id, new_count, days_valid):
@@ -246,7 +246,7 @@ def apply_patch(user_id, new_count, days_valid):
         expiry = datetime.now() + timedelta(days=days_valid)
         doc_ref.set({
             "user_id": user_id,
-            "device_id": State.device_id,
+            "device_id": st.session_state.device_id,
             "new_count": new_count,
             "expiry": expiry,
             "used": False
@@ -255,7 +255,7 @@ def apply_patch(user_id, new_count, days_valid):
         logging.info(f"Patch generated: {patch_id} for user {user_id}")
         return patch_id
     except Exception as e:
-        logging.error("Error generating patch: %s", e)
+        logging.error(f"Error generating patch for user {user_id}: {str(e)}")
         st.error("Error generating patch.")
         return None
 
@@ -274,10 +274,10 @@ def validate_patch(patch_id, user_id):
         if datetime.now() > data["expiry"]:
             st.error("Patch expired.")
             return False
-        if data["user_id"] != user_id or data["device_id"] != State.device_id:
+        if data["user_id"] != user_id or data["device_id"] != st.session_state.device_id:
             st.error("Patch not valid for this user or device.")
             return False
-        execution_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{State.device_id}")
+        execution_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{st.session_state.device_id}")
         execution_ref.update({
             "count": data["new_count"],
             "expiry": data["expiry"]
@@ -286,10 +286,10 @@ def validate_patch(patch_id, user_id):
         State.execution_count = data["new_count"]
         State.license_expiry = data["expiry"]
         st.success("Patch applied successfully.")
-        logging.info(f"Patch applied: {patch_id} for user {user_id}")
+        logging.info(f"Patch applied: {patch_id} for user {user_id}, new_count={data['new_count']}")
         return True
     except Exception as e:
-        logging.error("Error validating patch: %s", e)
+        logging.error(f"Error validating patch {patch_id} for user {user_id}: {str(e)}")
         st.error("Error applying patch.")
         return False
 
@@ -303,8 +303,6 @@ def overlay_logo_on_image(image, logo_path, position="center"):
         logo_array = np.array(logo)
         logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
         logo = Image.fromarray(logo_array)
-        
-        # Calculate position
         offset = int(min(img_width, img_height) * Config.LOGO_OFFSET_PERCENT)
         if position == "top":
             x = (img_width - logo.size[0]) // 2
@@ -312,16 +310,15 @@ def overlay_logo_on_image(image, logo_path, position="center"):
         elif position == "bottom":
             x = (img_width - logo.size[0]) // 2
             y = img_height - logo.size[1] - offset
-        else:  # center
+        else:
             x = (img_width - logo.size[0]) // 2
             y = (img_height - logo.size[1]) // 2
-        
         output = Image.new("RGBA", image.size)
         output.paste(image, (0, 0))
         output.paste(logo, (x, y), logo)
         return output
     except Exception as e:
-        logging.error("Error overlaying logo on image: %s", e)
+        logging.error(f"Error overlaying logo on image: {str(e)}")
         return image
 
 # Overlay logo on video with position option
@@ -338,8 +335,6 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         temp_logo_path = f"temp_logo_{uuid.uuid4()}.png"
         logo.save(temp_logo_path, "PNG")
         logo_clip = ImageClip(temp_logo_path).set_duration(video.duration)
-        
-        # Calculate position
         offset = int(min(vid_width, vid_height) * Config.LOGO_OFFSET_PERCENT)
         if position == "top":
             x = (vid_width - logo.size[0]) // 2
@@ -347,10 +342,9 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         elif position == "bottom":
             x = (vid_width - logo.size[0]) // 2
             y = vid_height - logo.size[1] - offset
-        else:  # center
+        else:
             x = (vid_width - logo.size[0]) // 2
             y = (vid_height - logo.size[1]) // 2
-        
         logo_clip = logo_clip.set_position((x, y))
         final_clip = CompositeVideoClip([video, logo_clip])
         final_clip.write_videofile(
@@ -365,9 +359,9 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         video.close()
         final_clip.close()
         os.remove(temp_logo_path)
-        logging.info("Video saved with logo to %s", output_path)
+        logging.info(f"Video saved with logo to {output_path}")
     except Exception as e:
-        logging.error("Error processing video: %s", e)
+        logging.error(f"Error processing video: {str(e)}")
         raise
 
 # JavaScript-based download (optional)
@@ -441,37 +435,52 @@ def verify_user(email, password):
         logging.error(f"Error verifying credentials: {str(e)}")
         return None, f"Error verifying credentials: {str(e)}"
 
-# Debug tool to simulate license limits (admin only)
-def debug_license_limits(user_id):
-    if not user_id:
+# Debug tool to manage license limits (admin only)
+def debug_license_limits(admin_user_id):
+    if not admin_user_id:
         st.error("No user_id for debug license limits.")
         return
-    try:
-        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{State.device_id}")
-        st.subheader("Debug License Limits")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Set Execution Count to 27"):
-                doc_ref.update({"count": Config.MAX_EXECUTIONS})
-                State.execution_count = Config.MAX_EXECUTIONS
-                st.success("Execution count set to 27. Reload to test limit.")
-                logging.info(f"Debug: Set execution count to {Config.MAX_EXECUTIONS} for user {user_id}")
-        with col2:
-            if st.button("Set Expiry to Past"):
-                past_expiry = datetime.now() - timedelta(days=1)
-                doc_ref.update({"expiry": past_expiry})
-                State.license_expiry = past_expiry
-                st.success("Expiry set to yesterday. Reload to test expiry.")
-                logging.info(f"Debug: Set expiry to {past_expiry} for user {user_id}")
-    except Exception as e:
-        logging.error(f"Error in debug license limits: {str(e)}")
-        st.error("Error updating license limits.")
+    st.subheader("Debug License Limits")
+    target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
+    if target_user_id:
+        try:
+            doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{target_user_id}_{st.session_state.device_id}")
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict()
+                current_count = data.get("count", 0)
+                current_expiry = data.get("expiry", datetime.now())
+                st.write(f"Current Count: {current_count}")
+                st.write(f"Current Expiry: {current_expiry}")
+            else:
+                st.warning(f"No license found for user {target_user_id}.")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("Set Count to 27", key="set_count_27"):
+                    doc_ref.update({"count": Config.MAX_EXECUTIONS})
+                    State.execution_count = Config.MAX_EXECUTIONS if target_user_id == admin_user_id else State.execution_count
+                    st.success("Execution count set to 27. Reload to test limit.")
+                    logging.info(f"Debug: Set execution count to {Config.MAX_EXECUTIONS} for user {target_user_id}")
+            with col2:
+                if st.button("Set Expiry to Past", key="set_expiry_past"):
+                    past_expiry = datetime.now() - timedelta(days=1)
+                    doc_ref.update({"expiry": past_expiry})
+                    State.license_expiry = past_expiry if target_user_id == admin_user_id else State.license_expiry
+                    st.success("Expiry set to yesterday. Reload to test expiry.")
+                    logging.info(f"Debug: Set expiry to {past_expiry} for user {target_user_id}")
+            with col3:
+                if st.button("Reset Count to 0", key="reset_count"):
+                    doc_ref.update({"count": 0})
+                    State.execution_count = 0 if target_user_id == admin_user_id else State.execution_count
+                    st.success("Execution count reset to 0. Reload to continue.")
+                    logging.info(f"Debug: Reset execution count to 0 for user {target_user_id}")
+        except Exception as e:
+            logging.error(f"Error in debug license limits for user {target_user_id}: {str(e)}")
+            st.error("Error updating license limits.")
 
 # Streamlit app
 def main():
     st.title("Logo Adder App")
-    
-    # Custom CSS for button styles
     st.markdown("""
         <style>
         div.stButton > button[kind="primary"][id="start_logoing"] {
@@ -500,7 +509,7 @@ def main():
         }
         </style>
     """, unsafe_allow_html=True)
-    
+
     # Initialize session state
     if "user" not in st.session_state:
         st.session_state.user = None
@@ -515,9 +524,9 @@ def main():
         st.session_state.download_all_index = None
         st.session_state.download_all_trigger = False
         st.session_state.blur_enabled = False
+        st.session_state.device_id = str(uuid.uuid4())  # Persistent device_id per session
 
-    # Debug session state at start
-    logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}")
+    logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
 
     # Authentication
     if not st.session_state.user:
@@ -525,7 +534,6 @@ def main():
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
         col1, col2 = st.columns([1, 2])
-        
         with col1:
             if st.button("Login"):
                 if not email or not password:
@@ -544,7 +552,6 @@ def main():
                     else:
                         st.session_state.auth_error = error
                         logging.error(f"Login failed: {error}")
-
         with col2:
             if st.button("Forgot Password?"):
                 if not email:
@@ -563,7 +570,6 @@ def main():
                     except Exception as e:
                         st.session_state.reset_message = f"Error generating reset link: {str(e)}"
                         logging.error(f"Password reset error: {str(e)}")
-
         if st.session_state.auth_error:
             st.error(f"Login failed: {st.session_state.auth_error}")
         if st.session_state.reset_message:
@@ -578,10 +584,9 @@ def main():
         st.session_state.user_id = st.session_state.user
         logging.info(f"Synced user_id from user: {st.session_state.user_id}")
 
-    # Debug session state after login
-    logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}")
+    logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
 
-    # Check license
+    # Check license early
     if not check_license(st.session_state.user_id):
         st.subheader("Apply Patch")
         patch_id = st.text_input("Enter Patch ID")
@@ -619,15 +624,19 @@ def main():
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
     st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.blur_enabled)
 
-    # Update session state for media files
+    # Update session state and increment count for media files
     if media_files:
+        new_files = [f for f in media_files if f.name not in [mf.name for mf in st.session_state.media_files]]
+        for media_file in new_files:
+            increment_execution(st.session_state.user_id, media_file.name)
         st.session_state.media_files = media_files
+        if new_files:
+            st.rerun()  # Rerun to check license after increment
 
-    # Logo position selection with styled buttons
+    # Logo position selection
     st.subheader("Logo Position")
     col1, col2, col3 = st.columns(3)
     positions = ["top", "center", "bottom"]
-    
     for col, pos in zip([col1, col2, col3], positions):
         with col:
             button_style = "background-color: #4CAF50; color: white; padding: 10px; border-radius: 5px; border: none; cursor: pointer;"
@@ -649,8 +658,6 @@ def main():
                     key=f"download_{uuid.uuid4()}",
                     help=f"Download logoed file: {original_name}"
                 )
-
-        # Download all files button
         if len(st.session_state.processed_files_data) > 1:
             st.warning("Please allow multiple downloads in your browser if prompted.")
             if Config.USE_JAVASCRIPT_DOWNLOAD:
@@ -692,33 +699,25 @@ def main():
             st.session_state.processed_files_data = []
             st.session_state.download_all_index = None
             st.session_state.download_all_trigger = False
-            
             logo_path = os.path.join(base_path, "Logos", st.session_state.logo_file.name)
             if not os.path.exists(logo_path):
                 with open(logo_path, "wb") as f:
                     f.write(st.session_state.logo_file.getbuffer())
-            
             processed_files = []
-            
             for media_file in st.session_state.media_files:
                 media_path = os.path.join(base_path, "Media", media_file.name)
                 output_filename = f"logoed_{datetime.now().strftime('%Y%m%d%H%M%S')}_{media_file.name}"
                 output_path = os.path.join(base_path, "Logoed_Media", output_filename)
                 intermediate_path = os.path.join(base_path, "Media", f"blurred_{media_file.name}")
-
                 with open(media_path, "wb") as f:
                     f.write(media_file.getbuffer())
-
                 try:
-                    # Step 1: Apply blurring if enabled
                     if media_file.name.lower().endswith((".jpg", "jpeg", "png")):
                         image = Image.open(media_path).convert("RGBA")
                         blurred_image = process_image(image, State.net, st.session_state.blur_enabled)
                         blurred_image.save(intermediate_path, "PNG")
                     else:
                         process_video(media_path, intermediate_path, State.net, st.session_state.blur_enabled)
-
-                    # Step 2: Apply logo
                     if media_file.name.lower().endswith((".jpg", "jpeg", "png")):
                         image = Image.open(intermediate_path).convert("RGBA")
                         output_image = overlay_logo_on_image(image, logo_path, st.session_state.logo_position)
@@ -731,19 +730,14 @@ def main():
                         with open(output_path, "rb") as f:
                             file_data = f.read()
                         processed_files.append((output_path, media_file.name, file_data))
-                    increment_execution(st.session_state.user_id)
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {e}")
-                    logging.error(f"Error processing {media_file.name}: {e}")
+                    logging.error(f"Error processing {media_file.name}: {str(e)}")
                 finally:
                     if os.path.exists(intermediate_path):
                         os.remove(intermediate_path)
-
-            # Store processed files in session state
             st.session_state.logoed_files = [(file_path, original_name) for file_path, original_name, _ in processed_files]
             st.session_state.processed_files_data = processed_files
-
-            # Display download buttons for new files
             st.subheader("Download Logoed Files")
             for file_path, original_name, file_data in st.session_state.processed_files_data:
                 st.download_button(
@@ -753,8 +747,6 @@ def main():
                     key=f"download_{uuid.uuid4()}",
                     help=f"Download logoed file: {original_name}"
                 )
-
-            # Download all files button
             if len(st.session_state.processed_files_data) > 1:
                 st.warning("Please allow multiple downloads in your browser if prompted.")
                 if Config.USE_JAVASCRIPT_DOWNLOAD:
@@ -767,6 +759,7 @@ def main():
         st.subheader("Debug Session State")
         st.write(f"user: {st.session_state.user}")
         st.write(f"user_id: {st.session_state.user_id}")
+        st.write(f"device_id: {st.session_state.device_id}")
         st.write(f"auth_error: {st.session_state.auth_error}")
         st.write(f"logo_file: {st.session_state.logo_file}")
         st.write(f"media_files: {len(st.session_state.media_files)} files")
@@ -781,7 +774,7 @@ def main():
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
         st.subheader("Admin: Generate Patch")
         target_user = st.text_input("Target User ID")
-        new_count = st.number_input("New Execution Count", min_value=0, value=27)
+        new_count = st.number_input("New Execution Count", min_value=0, value=0)  # Default to 0 for reset
         days_valid = st.number_input("Days Valid", min_value=1, value=30)
         if st.button("Generate Patch"):
             patch_id = apply_patch(target_user, new_count, days_valid)
