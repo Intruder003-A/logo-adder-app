@@ -371,6 +371,36 @@ def verify_user(email, password):
 def main():
     st.title("Logo Adder App")
     
+    # Custom CSS for button styles
+    st.markdown("""
+        <style>
+        div.stButton > button[kind="primary"][id="start_logoing"] {
+            background-color: #007BFF;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        div.stButton > button[kind="primary"][id="start_logoing"]:hover {
+            background-color: #0056b3;
+        }
+        div.stButton > button[id="download_all"] {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        div.stButton > button[id="download_all"]:hover {
+            background-color: #45a049;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
     # Authentication
     if "user" not in st.session_state:
         st.session_state.user = None
@@ -484,31 +514,37 @@ def main():
     # Display existing logoed files
     if st.session_state.processed_files_data:
         st.subheader("Download Logoed Files")
+        download_button_ids = []
         for file_path, original_name, file_data in st.session_state.processed_files_data:
             if os.path.exists(file_path):
+                button_id = f"download_{uuid.uuid4()}"
+                download_button_ids.append(button_id)
                 st.download_button(
                     label=f"Download {os.path.basename(file_path)}",
                     data=file_data,
                     file_name=os.path.basename(file_path),
-                    key=f"download_{uuid.uuid4()}",
+                    key=button_id,
                     help=f"Download logoed file: {original_name}"
                 )
 
         # Download all files button
         if len(st.session_state.processed_files_data) > 1:
-            if st.button("Download All Files", key="download_all"):
-                for file_path, original_name, file_data in st.session_state.processed_files_data:
-                    st.download_button(
-                        label=f"Downloading {os.path.basename(file_path)}",
-                        data=file_data,
-                        file_name=os.path.basename(file_path),
-                        key=f"download_all_{uuid.uuid4()}",
-                        help=f"Downloading logoed file: {original_name}"
-                    )
+            # JavaScript to trigger all download buttons
+            download_all_js = """
+            <script>
+            function triggerAllDownloads() {
+                %s
+            }
+            </script>
+            """ % ";".join([f"document.getElementById('{button_id}').click()" for button_id in download_button_ids])
+            st.markdown(download_all_js, unsafe_allow_html=True)
+            
+            # Green Download All button
+            st.button("Download All Files", key="download_all", on_click=lambda: None, help="Download all logoed files")
 
     # Start Logoing button
     if st.session_state.logo_file and st.session_state.media_files:
-        if st.button("Start Logoing"):
+        if st.button("Start Logoing", key="start_logoing", type="primary"):
             # Clear previous logoed files
             st.session_state.logoed_files = []
             st.session_state.processed_files_data = []
@@ -564,26 +600,29 @@ def main():
 
             # Display download buttons for new files
             st.subheader("Download Logoed Files")
+            download_button_ids = []
             for file_path, original_name, file_data in st.session_state.processed_files_data:
+                button_id = f"download_{uuid.uuid4()}"
+                download_button_ids.append(button_id)
                 st.download_button(
                     label=f"Download {os.path.basename(file_path)}",
                     data=file_data,
                     file_name=os.path.basename(file_path),
-                    key=f"download_{uuid.uuid4()}",
+                    key=button_id,
                     help=f"Download logoed file: {original_name}"
                 )
 
             # Download all files button
             if len(st.session_state.processed_files_data) > 1:
-                if st.button("Download All Files", key="download_all_new"):
-                    for file_path, original_name, file_data in st.session_state.processed_files_data:
-                        st.download_button(
-                            label=f"Downloading {os.path.basename(file_path)}",
-                            data=file_data,
-                            file_name=os.path.basename(file_path),
-                            key=f"download_all_{uuid.uuid4()}",
-                            help=f"Downloading logoed file: {original_name}"
-                        )
+                download_all_js = """
+                <script>
+                function triggerAllDownloads() {
+                    %s
+                }
+                </script>
+                """ % ";".join([f"document.getElementById('{button_id}').click()" for button_id in download_button_ids])
+                st.markdown(download_all_js, unsafe_allow_html=True)
+                st.button("Download All Files", key="download_all", on_click=lambda: None, help="Download all logoed files")
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
