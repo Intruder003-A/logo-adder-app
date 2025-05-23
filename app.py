@@ -14,34 +14,42 @@ import json
 import cv2
 import io
 import base64
+from google.cloud.exceptions import PermissionDenied
+import traceback
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize Firebase Admin SDK
-if not firebase_admin._apps:
-    try:
-        firebase_credentials = st.secrets["firebase"]["credential"]
-        cred_dict = json.loads(firebase_credentials)
-        cred = credentials.Certificate(cred_dict)
-        logging.info("Loaded Firebase credentials from st.secrets")
-    except (KeyError, ValueError, json.JSONDecodeError) as e:
-        logging.warning(f"Failed to load credentials from st.secrets: {str(e)}. Falling back to local file.")
+db = None
+try:
+    if not firebase_admin._apps:
         try:
-            cred = credentials.Certificate("logoadder-d22b5-firebase-adminsdk.json")
-            logging.info("Loaded Firebase credentials from local file")
-        except Exception as e:
-            logging.error(f"Failed to load local credentials: {str(e)}")
-            st.error("Firebase credentials could not be loaded. Contact support.")
-            cred = None
-    if cred:
-        try:
+            firebase_credentials = st.secrets["firebase"]["credential"]
+            cred_dict = json.loads(firebase_credentials)
+            cred = credentials.Certificate(cred_dict)
+            logging.info("Loaded Firebase credentials from st.secrets")
+        except (KeyError, ValueError, json.JSONDecodeError) as e:
+            logging.warning(f"Failed to load credentials from st.secrets: {str(e)}. Falling back to local file.")
+            try:
+                cred = credentials.Certificate("logoadder-d22b5-firebase-adminsdk.json")
+                logging.info("Loaded Firebase credentials from local file")
+            except Exception as e:
+                logging.error(f"Failed to load local credentials: {str(e)}")
+                cred = None
+        if cred:
             firebase_admin.initialize_app(cred)
-            logging.info("Firebase Admin SDK initialized successfully")
-        except Exception as e:
-            logging.error(f"Failed to initialize Firebase Admin SDK: {str(e)}")
-            st.error("Failed to initialize Firebase. Contact support.")
-db = firestore.client() if firebase_admin._apps else None
+            db = firestore.client()
+            logging.info("Firebase Admin SDK and Firestore initialized successfully")
+        else:
+            logging.error("No valid Firebase credentials provided.")
+            st.error("Firebase credentials missing. Contact support.")
+    else:
+        db = firestore.client()
+        logging.info("Firebase Admin SDK already initialized, using existing Firestore client")
+except Exception as e:
+    logging.error(f"Unexpected error initializing Firebase: {str(e)}\n{traceback.format_exc()}")
+    st.error("Failed to initialize Firebase. Contact support.")
 
 # Firebase Web API Key
 try:
@@ -184,7 +192,7 @@ def process_video(video_path, output_path, net, blur_enabled):
             logging.info("Removed temporary file: %s", temp_output_path)
         logging.info("Video saved with blur: %s", output_path)
     except Exception as e:
-        logging.error("Error processing video blur: %s", e)
+        logging.error("Error processing video blur: %s", str(e))
         shutil.copy(video_path, output_path)
 
 # Check license and execution count
@@ -193,8 +201,25 @@ def check_license(user_id):
         logging.error("No user_id provided for license check.")
         st.error("User not authenticated. Please log in.")
         return False
+    if not hasattr(st.session_state, 'device_id') or not st.session_state.device_id:
+        logging.error("No device_id in session state.")
+        st.error("Session error: Device ID missing. Please log out and log in again.")
+        return False
+    if db is None:
+        logging.error("Firestore client not initialized. Using fallback count.")
+        st.warning("Firestore unavailable. Using local execution count (temporary).")
+        if not hasattr(st.session_state, 'local_execution_count'):
+            st.session_state.local_execution_count = 0
+        State.execution_count = st.session_state.local_execution_count
+        State.license_expiry = datetime.now() + timedelta(days=30)
+        if State.execution_count >= Config.MAX_EXECUTIONS:
+            st.error("Execution limit reached. Contact the service team for a new patch.")
+            return False
+        return True
     try:
-        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{st.session_state.device_id}")
+        doc_id = f"{user_id}_{st.session_state.device_id}"
+        logging.info(f"Attempting to access Firestore document: {Config.EXECUTION_COLLECTION}/{doc_id}")
+        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(doc_id)
         doc = doc_ref.get()
         if doc.exists:
             data = doc.to_dict()
@@ -218,28 +243,47 @@ def check_license(user_id):
             st.error("Execution limit reached. Contact the service team for a new patch.")
             return False
         return True
+    except PermissionDenied as e:
+        logging.error(f"Firestore permission denied for user {user_id}: {str(e)}\n{traceback.format_exc()}")
+        st.error("Firestore access denied. Check Firebase security rules or contact support.")
+        return False
     except Exception as e:
-        logging.error(f"License check failed for user {user_id}: {str(e)}")
-        st.error("Error checking license. Contact the service team.")
+        logging.error(f"License check failed for user {user_id}: {str(e)}\n{traceback.format_exc()}")
+        st.error(f"Error checking license: {str(e)}. Contact the service team.")
         return False
 
 # Increment execution count
 def increment_execution(user_id, file_name):
     if not user_id:
-        logging.warning(f"No user_id for execution count increment for file {file_name}. Skipping Firestore update.")
+        logging.warning(f"No user_id for execution count increment for file {file_name}. Skipping.")
         State.execution_count += 1
+        return
+    if db is None:
+        logging.warning(f"Firestore unavailable for increment, using local count for file {file_name}.")
+        if not hasattr(st.session_state, 'local_execution_count'):
+            st.session_state.local_execution_count = 0
+        st.session_state.local_execution_count += 1
+        State.execution_count = st.session_state.local_execution_count
+        logging.info(f"Local execution count updated to {State.execution_count} for user {user_id}, file {file_name}")
         return
     try:
         doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{st.session_state.device_id}")
         State.execution_count += 1
         doc_ref.update({"count": State.execution_count})
         logging.info(f"Execution count updated to {State.execution_count} for user {user_id}, file {file_name}")
+    except PermissionDenied as e:
+        logging.error(f"Firestore permission denied incrementing count for user {user_id}, file {file_name}: {str(e)}\n{traceback.format_exc()}")
+        st.error("Firestore access denied. Contact support.")
     except Exception as e:
-        logging.error(f"Error incrementing execution count for user {user_id}, file {file_name}: {str(e)}")
+        logging.error(f"Error incrementing execution count for user {user_id}, file {file_name}: {str(e)}\n{traceback.format_exc()}")
         st.error(f"Error updating execution count for {file_name}. Contact support.")
 
 # Apply patch (admin function)
 def apply_patch(user_id, new_count, days_valid):
+    if db is None:
+        logging.error("Firestore client not initialized. Cannot generate patch.")
+        st.error("Firestore unavailable. Cannot generate patch.")
+        return None
     try:
         patch_id = str(uuid.uuid4())
         doc_ref = db.collection(Config.LICENSE_COLLECTION).document(patch_id)
@@ -255,12 +299,16 @@ def apply_patch(user_id, new_count, days_valid):
         logging.info(f"Patch generated: {patch_id} for user {user_id}")
         return patch_id
     except Exception as e:
-        logging.error(f"Error generating patch for user {user_id}: {str(e)}")
+        logging.error(f"Error generating patch for user {user_id}: {str(e)}\n{traceback.format_exc()}")
         st.error("Error generating patch.")
         return None
 
 # Validate and apply patch
 def validate_patch(patch_id, user_id):
+    if db is None:
+        logging.error("Firestore client not initialized. Cannot apply patch.")
+        st.error("Firestore unavailable. Cannot apply patch.")
+        return False
     try:
         doc_ref = db.collection(Config.LICENSE_COLLECTION).document(patch_id)
         doc = doc_ref.get()
@@ -285,11 +333,12 @@ def validate_patch(patch_id, user_id):
         doc_ref.update({"used": True})
         State.execution_count = data["new_count"]
         State.license_expiry = data["expiry"]
+        st.session_state.local_execution_count = data["new_count"] if hasattr(st.session_state, 'local_execution_count') else None
         st.success("Patch applied successfully.")
         logging.info(f"Patch applied: {patch_id} for user {user_id}, new_count={data['new_count']}")
         return True
     except Exception as e:
-        logging.error(f"Error validating patch {patch_id} for user {user_id}: {str(e)}")
+        logging.error(f"Error validating patch {patch_id} for user {user_id}: {str(e)}\n{traceback.format_exc()}")
         st.error("Error applying patch.")
         return False
 
@@ -441,8 +490,9 @@ def debug_license_limits(admin_user_id):
         st.error("No user_id for debug license limits.")
         return
     st.subheader("Debug License Limits")
+    st.write(f"Firestore Status: {'Connected' if db is not None else 'Disconnected'}")
     target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
-    if target_user_id:
+    if target_user_id and db is not None:
         try:
             doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{target_user_id}_{st.session_state.device_id}")
             doc = doc_ref.get()
@@ -454,7 +504,7 @@ def debug_license_limits(admin_user_id):
                 st.write(f"Current Expiry: {current_expiry}")
             else:
                 st.warning(f"No license found for user {target_user_id}.")
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 if st.button("Set Count to 27", key="set_count_27"):
                     doc_ref.update({"count": Config.MAX_EXECUTIONS})
@@ -474,9 +524,19 @@ def debug_license_limits(admin_user_id):
                     State.execution_count = 0 if target_user_id == admin_user_id else State.execution_count
                     st.success("Execution count reset to 0. Reload to continue.")
                     logging.info(f"Debug: Reset execution count to 0 for user {target_user_id}")
+            with col4:
+                if st.button("Delete License", key="delete_license"):
+                    doc_ref.delete()
+                    if target_user_id == admin_user_id:
+                        State.execution_count = 0
+                        State.license_expiry = datetime.now() + timedelta(days=30)
+                    st.success("License deleted. Reload to recreate.")
+                    logging.info(f"Debug: Deleted license for user {target_user_id}")
         except Exception as e:
-            logging.error(f"Error in debug license limits for user {target_user_id}: {str(e)}")
-            st.error("Error updating license limits.")
+            logging.error(f"Error in debug license limits for user {target_user_id}: {str(e)}\n{traceback.format_exc()}")
+            st.error(f"Error accessing Firestore for user {target_user_id}: {str(e)}")
+    elif target_user_id:
+        st.warning("Firestore unavailable. Debug tools limited.")
 
 # Streamlit app
 def main():
@@ -524,7 +584,8 @@ def main():
         st.session_state.download_all_index = None
         st.session_state.download_all_trigger = False
         st.session_state.blur_enabled = False
-        st.session_state.device_id = str(uuid.uuid4())  # Persistent device_id per session
+        st.session_state.device_id = str(uuid.uuid4())
+        logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
 
     logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
 
@@ -631,7 +692,7 @@ def main():
             increment_execution(st.session_state.user_id, media_file.name)
         st.session_state.media_files = media_files
         if new_files:
-            st.rerun()  # Rerun to check license after increment
+            st.rerun()
 
     # Logo position selection
     st.subheader("Logo Position")
@@ -669,6 +730,40 @@ def main():
                     st.session_state.download_all_index = 0
                     logging.info("Download All Files initiated")
                     st.rerun()
+
+    # Handle Download All Files (sequential)
+    if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.download_all_trigger and st.session_state.processed_files_data:
+        index = st.session_state.download_all_index
+        if index is None or index >= len(st.session_state.processed_files_data):
+            st.session_state.download_all_trigger = False
+            st.session_state.download_all_index = None
+            logging.info("Download All Files completed")
+            st.success("All files downloaded successfully.")
+        else:
+            file_path, original_name, file_data = st.session_state.processed_files_data[index]
+            logging.info(f"Triggering download for file {index + 1}/{len(st.session_state.processed_files_data)}: {os.path.basename(file_path)}")
+            st.download_button(
+                label=f"Downloading {os.path.basename(file_path)}",
+                data=file_data,
+                file_name=os.path.basename(file_path),
+                key=f"download    st.download_button(
+        label=f"Download {os.path.basename(file_path)}",
+        data=file_data,
+        file_name=os.path.basename(file_path),
+        key=f"download_{uuid.uuid4()}",
+        help=f"Download logoed file: {original_name}"
+    )
+    if len(st.session_state.processed_files_data) > 1:
+        st.warning("Please allow multiple downloads in your browser if prompted.")
+        if Config.USE_JAVASCRIPT_DOWNLOAD:
+            trigger_multiple_downloads(st.session_state.processed_files_data)
+        else:
+            unique_key = f"download_all_btn_{uuid.uuid4()}"
+            if st.button("Download All Files", key=unique_key, help="Download all logoed files"):
+                st.session_state.download_all_trigger = True
+                st.session_state.download_all_index = 0
+                logging.info("Download All Files initiated")
+                st.rerun()
 
     # Handle Download All Files (sequential)
     if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.download_all_trigger and st.session_state.processed_files_data:
@@ -774,7 +869,7 @@ def main():
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
         st.subheader("Admin: Generate Patch")
         target_user = st.text_input("Target User ID")
-        new_count = st.number_input("New Execution Count", min_value=0, value=0)  # Default to 0 for reset
+        new_count = st.number_input("New Execution Count", min_value=0, value=0)
         days_valid = st.number_input("Days Valid", min_value=1, value=30)
         if st.button("Generate Patch"):
             patch_id = apply_patch(target_user, new_count, days_valid)
