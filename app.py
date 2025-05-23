@@ -5,7 +5,7 @@ from firebase_admin import credentials, firestore, auth
 from PIL import Image
 import numpy as np
 from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 import logging
 import shutil
@@ -210,7 +210,7 @@ def check_license(user_id):
         if not hasattr(st.session_state, 'local_execution_count'):
             st.session_state.local_execution_count = 0
         State.execution_count = st.session_state.local_execution_count
-        State.license_expiry = datetime.now() + timedelta(days=30)
+        State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
         if State.execution_count >= Config.MAX_EXECUTIONS:
             st.error("Execution limit reached. Contact the service team for a new patch.")
             return False
@@ -223,11 +223,11 @@ def check_license(user_id):
         if doc.exists:
             data = doc.to_dict()
             State.execution_count = data.get("count", 0)
-            State.license_expiry = data.get("expiry", datetime.now())
+            State.license_expiry = data.get("expiry", datetime.now(timezone.utc))
             logging.info(f"License checked for user {user_id}: count={State.execution_count}, expiry={State.license_expiry}")
         else:
             State.execution_count = 0
-            State.license_expiry = datetime.now() + timedelta(days=30)
+            State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
             doc_ref.set({
                 "user_id": user_id,
                 "device_id": st.session_state.device_id,
@@ -235,9 +235,20 @@ def check_license(user_id):
                 "expiry": State.license_expiry
             })
             logging.info(f"New license created for user {user_id}: count=0, expiry={State.license_expiry}")
-        if datetime.now() > State.license_expiry:
-            st.error("License expired. Contact the service team for a new patch.")
-            return False
+        try:
+            # Ensure expiry is offset-aware
+            expiry = State.license_expiry
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expiry:
+                st.error("License expired. Contact the service team for a new patch.")
+                return False
+        except TypeError as e:
+            logging.error(f"Datetime comparison error for user {user_id}: {str(e)}\n{traceback.format_exc()}")
+            st.error(f"Error checking license expiry: {str(e)}. Using local count temporarily.")
+            State.execution_count = getattr(st.session_state, 'local_execution_count', 0)
+            State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+            return True
         if State.execution_count >= Config.MAX_EXECUTIONS:
             st.error("Execution limit reached. Contact the service team for a new patch.")
             return False
@@ -287,7 +298,7 @@ def apply_patch(user_id, new_count, days_valid):
     try:
         patch_id = str(uuid.uuid4())
         doc_ref = db.collection(Config.LICENSE_COLLECTION).document(patch_id)
-        expiry = datetime.now() + timedelta(days=days_valid)
+        expiry = datetime.now(timezone.utc) + timedelta(days=days_valid)
         doc_ref.set({
             "user_id": user_id,
             "device_id": st.session_state.device_id,
@@ -319,7 +330,10 @@ def validate_patch(patch_id, user_id):
         if data["used"]:
             st.error("Patch already used.")
             return False
-        if datetime.now() > data["expiry"]:
+        expiry = data["expiry"]
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expiry:
             st.error("Patch expired.")
             return False
         if data["user_id"] != user_id or data["device_id"] != st.session_state.device_id:
@@ -328,11 +342,11 @@ def validate_patch(patch_id, user_id):
         execution_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{st.session_state.device_id}")
         execution_ref.update({
             "count": data["new_count"],
-            "expiry": data["expiry"]
+            "expiry": expiry
         })
         doc_ref.update({"used": True})
         State.execution_count = data["new_count"]
-        State.license_expiry = data["expiry"]
+        State.license_expiry = expiry
         st.session_state.local_execution_count = data["new_count"] if hasattr(st.session_state, 'local_execution_count') else None
         st.success("Patch applied successfully.")
         logging.info(f"Patch applied: {patch_id} for user {user_id}, new_count={data['new_count']}")
@@ -499,7 +513,9 @@ def debug_license_limits(admin_user_id):
             if doc.exists:
                 data = doc.to_dict()
                 current_count = data.get("count", 0)
-                current_expiry = data.get("expiry", datetime.now())
+                current_expiry = data.get("expiry", datetime.now(timezone.utc))
+                if current_expiry.tzinfo is None:
+                    current_expiry = current_expiry.replace(tzinfo=timezone.utc)
                 st.write(f"Current Count: {current_count}")
                 st.write(f"Current Expiry: {current_expiry}")
             else:
@@ -513,7 +529,7 @@ def debug_license_limits(admin_user_id):
                     logging.info(f"Debug: Set execution count to {Config.MAX_EXECUTIONS} for user {target_user_id}")
             with col2:
                 if st.button("Set Expiry to Past", key="set_expiry_past"):
-                    past_expiry = datetime.now() - timedelta(days=1)
+                    past_expiry = datetime.now(timezone.utc) - timedelta(days=1)
                     doc_ref.update({"expiry": past_expiry})
                     State.license_expiry = past_expiry if target_user_id == admin_user_id else State.license_expiry
                     st.success("Expiry set to yesterday. Reload to test expiry.")
@@ -529,7 +545,7 @@ def debug_license_limits(admin_user_id):
                     doc_ref.delete()
                     if target_user_id == admin_user_id:
                         State.execution_count = 0
-                        State.license_expiry = datetime.now() + timedelta(days=30)
+                        State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
                     st.success("License deleted. Reload to recreate.")
                     logging.info(f"Debug: Deleted license for user {target_user_id}")
         except Exception as e:
@@ -767,7 +783,7 @@ def main():
             processed_files = []
             for media_file in st.session_state.media_files:
                 media_path = os.path.join(base_path, "Media", media_file.name)
-                output_filename = f"logoed_{datetime.now().strftime('%Y%m%d%H%M%S')}_{media_file.name}"
+                output_filename = f"logoed_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{media_file.name}"
                 output_path = os.path.join(base_path, "Logoed_Media", output_filename)
                 intermediate_path = os.path.join(base_path, "Media", f"blurred_{media_file.name}")
                 with open(media_path, "wb") as f:
