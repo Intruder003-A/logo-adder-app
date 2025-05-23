@@ -746,40 +746,6 @@ def main():
                 label=f"Downloading {os.path.basename(file_path)}",
                 data=file_data,
                 file_name=os.path.basename(file_path),
-                key=f"download    st.download_button(
-        label=f"Download {os.path.basename(file_path)}",
-        data=file_data,
-        file_name=os.path.basename(file_path),
-        key=f"download_{uuid.uuid4()}",
-        help=f"Download logoed file: {original_name}"
-    )
-    if len(st.session_state.processed_files_data) > 1:
-        st.warning("Please allow multiple downloads in your browser if prompted.")
-        if Config.USE_JAVASCRIPT_DOWNLOAD:
-            trigger_multiple_downloads(st.session_state.processed_files_data)
-        else:
-            unique_key = f"download_all_btn_{uuid.uuid4()}"
-            if st.button("Download All Files", key=unique_key, help="Download all logoed files"):
-                st.session_state.download_all_trigger = True
-                st.session_state.download_all_index = 0
-                logging.info("Download All Files initiated")
-                st.rerun()
-
-    # Handle Download All Files (sequential)
-    if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.download_all_trigger and st.session_state.processed_files_data:
-        index = st.session_state.download_all_index
-        if index is None or index >= len(st.session_state.processed_files_data):
-            st.session_state.download_all_trigger = False
-            st.session_state.download_all_index = None
-            logging.info("Download All Files completed")
-            st.success("All files downloaded successfully.")
-        else:
-            file_path, original_name, file_data = st.session_state.processed_files_data[index]
-            logging.info(f"Triggering download for file {index + 1}/{len(st.session_state.processed_files_data)}: {os.path.basename(file_path)}")
-            st.download_button(
-                label=f"Downloading {os.path.basename(file_path)}",
-                data=file_data,
-                file_name=os.path.basename(file_path),
                 key=f"download_all_{index}_{uuid.uuid4()}",
                 help=f"Downloading logoed file: {original_name}"
             )
