@@ -725,18 +725,7 @@ def main():
                 else:
                     st.button("Download All Files", key=f"download_all_btn_{uuid.uuid4()}", help="Download all logoed files")
 
-    # Debug session state
-    st.session_state.debug = True
-    if st.session_state.get("debug", False):
-        st.subheader("Debug Session State")
-        st.write(f"user: {st.session_state.user}")
-        st.write(f"user_id: {st.session_state.user_id}")
-        st.write(f"auth_error: {st.session_state.auth_error}")
-        st.write(f"logo_file: {st.session_state.logo_file}")
-        st.write(f"media_files: {len(st.session_state.media_files)} files")
-        st.write(f"processed_files_data: {len(st.session_state.processed_files_data)} files")
-        st.write(f"download_all_index: {st.session_state.download_all_index}")
-        st.write(f"State.execution_count: {State.execution_count}")
+   
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
