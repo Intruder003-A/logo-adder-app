@@ -200,10 +200,6 @@ def check_license(user_id):
         logging.error("No user_id provided for license check.")
         st.error("User not authenticated. Please log in.")
         return False
-    if not hasattr(st.session_state, 'device_id') or not st.session_state.device_id:
-        logging.error("No device_id in session state.")
-        st.error("Session error: Device ID missing. Please log out and log in again.")
-        return False
     if db is None:
         logging.error("Firestore client not initialized. Using fallback count.")
         st.warning("Firestore unavailable. Using local execution count (temporary).")
@@ -216,9 +212,7 @@ def check_license(user_id):
             return False
         return True
     try:
-        doc_id = f"{user_id}_{st.session_state.device_id}"
-        logging.info(f"Attempting to access Firestore document: {Config.EXECUTION_COLLECTION}/{doc_id}")
-        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(doc_id)
+        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
         doc = doc_ref.get()
         if doc.exists:
             data = doc.to_dict()
@@ -230,13 +224,12 @@ def check_license(user_id):
             State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
             doc_ref.set({
                 "user_id": user_id,
-                "device_id": st.session_state.device_id,
                 "count": State.execution_count,
-                "expiry": State.license_expiry
+                "expiry": State.license_expiry,
+                "created_at": datetime.now(timezone.utc)
             })
             logging.info(f"New license created for user {user_id}: count=0, expiry={State.license_expiry}")
         try:
-            # Ensure expiry is offset-aware
             expiry = State.license_expiry
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=timezone.utc)
@@ -277,9 +270,13 @@ def increment_execution(user_id, file_name):
         logging.info(f"Local execution count updated to {State.execution_count} for user {user_id}, file {file_name}")
         return
     try:
-        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{st.session_state.device_id}")
+        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
+        doc_ref.update({
+            "count": firestore.Increment(1),
+            "last_updated": datetime.now(timezone.utc),
+            "last_file": file_name
+        })
         State.execution_count += 1
-        doc_ref.update({"count": State.execution_count})
         logging.info(f"Execution count updated to {State.execution_count} for user {user_id}, file {file_name}")
     except Exception as e:
         if "PERMISSION_DENIED" in str(e).upper():
@@ -301,7 +298,6 @@ def apply_patch(user_id, new_count, days_valid):
         expiry = datetime.now(timezone.utc) + timedelta(days=days_valid)
         doc_ref.set({
             "user_id": user_id,
-            "device_id": st.session_state.device_id,
             "new_count": new_count,
             "expiry": expiry,
             "used": False
@@ -336,10 +332,10 @@ def validate_patch(patch_id, user_id):
         if datetime.now(timezone.utc) > expiry:
             st.error("Patch expired.")
             return False
-        if data["user_id"] != user_id or data["device_id"] != st.session_state.device_id:
-            st.error("Patch not valid for this user or device.")
+        if data["user_id"] != user_id:
+            st.error("Patch not valid for this user.")
             return False
-        execution_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{user_id}_{st.session_state.device_id}")
+        execution_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
         execution_ref.update({
             "count": data["new_count"],
             "expiry": expiry
@@ -508,7 +504,7 @@ def debug_license_limits(admin_user_id):
     target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
     if target_user_id and db is not None:
         try:
-            doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(f"{target_user_id}_{st.session_state.device_id}")
+            doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(target_user_id)
             doc = doc_ref.get()
             if doc.exists:
                 data = doc.to_dict()
