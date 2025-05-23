@@ -23,17 +23,32 @@ if not firebase_admin._apps:
         firebase_credentials = st.secrets["firebase"]["credential"]
         cred_dict = json.loads(firebase_credentials)
         cred = credentials.Certificate(cred_dict)
+        logging.info("Loaded Firebase credentials from st.secrets")
     except (KeyError, ValueError, json.JSONDecodeError) as e:
         logging.warning(f"Failed to load credentials from st.secrets: {str(e)}. Falling back to local file.")
-        cred = credentials.Certificate("logoadder-d22b5-firebase-adminsdk.json")
-    firebase_admin.initialize_app(cred)  # No storageBucket, as Storage is optional
-db = firestore.client()
+        try:
+            cred = credentials.Certificate("logoadder-d22b5-firebase-adminsdk.json")
+            logging.info("Loaded Firebase credentials from local file")
+        except Exception as e:
+            logging.error(f"Failed to load local credentials: {str(e)}")
+            st.error("Firebase credentials could not be loaded. Contact support.")
+            cred = None
+    if cred:
+        try:
+            firebase_admin.initialize_app(cred)
+            logging.info("Firebase Admin SDK initialized successfully")
+        except Exception as e:
+            logging.error(f"Failed to initialize Firebase Admin SDK: {str(e)}")
+            st.error("Failed to initialize Firebase. Contact support.")
+db = firestore.client() if firebase_admin._apps else None
 
 # Firebase Web API Key
 try:
     FIREBASE_API_KEY = st.secrets["firebase"]["api_key"]
+    logging.info("Loaded Firebase API key from st.secrets")
 except KeyError:
     FIREBASE_API_KEY = "AIzaSyD5DufwXe2cOPZniy-3K-LTRA-csWcbWEg"
+    logging.warning("Using fallback Firebase API key")
 
 # Configuration
 class Config:
@@ -362,6 +377,7 @@ def verify_user(email, password):
         response = requests.post(url, json=payload)
         response.raise_for_status()
         data = response.json()
+        logging.info(f"Firebase Auth response: {data}")
         if "idToken" in data:
             user_id = data.get("localId")
             logging.info(f"User authenticated: {user_id}")
@@ -373,8 +389,10 @@ def verify_user(email, password):
                 return None, "Email not registered."
             elif "INVALID_PASSWORD" in error_message:
                 return None, "Incorrect password."
+            elif "INVALID_LOGIN_CREDENTIALS" in error_message:
+                return None, "Invalid email or password."
             else:
-                return None, error_message
+                return None, f"Authentication error: {error_message}"
     except requests.exceptions.RequestException as e:
         logging.error(f"Error verifying credentials: {str(e)}")
         return None, f"Error verifying credentials: {str(e)}"
@@ -422,8 +440,8 @@ def main():
         st.session_state.logoed_files = []
         st.session_state.logo_file = None
         st.session_state.media_files = []
-        st.session_state.processed_files_data = []  # Store file data for persistence
-        st.session_state.download_all_index = None  # Track download all progress
+        st.session_state.processed_files_data = []
+        st.session_state.download_all_index = None
 
     if not st.session_state.user:
         st.subheader("Login")
@@ -442,10 +460,12 @@ def main():
                         State.user_id = uid
                         st.session_state.auth_error = None
                         st.session_state.reset_message = None
+                        logging.info(f"Session state updated: user={uid}")
                         st.success("Logged in successfully.")
                         st.rerun()
                     else:
                         st.session_state.auth_error = error
+                        logging.error(f"Login failed: {error}")
 
         with col2:
             if st.button("Forgot Password?"):
@@ -457,10 +477,13 @@ def main():
                         reset_link = auth.generate_password_reset_link(email)
                         st.session_state.reset_message = f"Password reset link: {reset_link}"
                         st.session_state.auth_error = None
+                        logging.info(f"Password reset link generated for {email}")
                     except auth.UserNotFoundError:
                         st.session_state.reset_message = "Email not registered."
+                        logging.error(f"Password reset failed: Email {email} not registered")
                     except Exception as e:
                         st.session_state.reset_message = f"Error generating reset link: {str(e)}"
+                        logging.error(f"Password reset error: {str(e)}")
 
         if st.session_state.auth_error:
             st.error(f"Login failed: {st.session_state.auth_error}")
@@ -542,6 +565,7 @@ def main():
             st.warning("Please allow multiple downloads in your browser if prompted.")
             if st.button("Download All Files", key="download_all", help="Download all logoed files"):
                 st.session_state.download_all_index = 0  # Start downloading from the first file
+                logging.info("Download All Files initiated")
                 st.rerun()
 
     # Handle Download All Files
@@ -561,6 +585,7 @@ def main():
             st.rerun()
         else:
             st.session_state.download_all_index = None  # Reset after all files are downloaded
+            logging.info("Download All Files completed")
 
     # Start Logoing button
     if st.session_state.logo_file and st.session_state.media_files:
@@ -639,12 +664,15 @@ def main():
     # Debug session state
     st.session_state.debug = True
     if st.session_state.get("debug", False):
-        st.write("Debug Session State:")
+        st.subheader("Debug Session State")
         st.write(f"user: {st.session_state.user}")
+        st.write(f"auth_error: {st.session_state.auth_error}")
         st.write(f"logo_file: {st.session_state.logo_file}")
         st.write(f"media_files: {len(st.session_state.media_files)} files")
         st.write(f"processed_files_data: {len(st.session_state.processed_files_data)} files")
         st.write(f"download_all_index: {st.session_state.download_all_index}")
+        st.write(f"State.user_id: {State.user_id}")
+        st.write(f"State.execution_count: {State.execution_count}")
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
