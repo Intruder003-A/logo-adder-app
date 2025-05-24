@@ -64,14 +64,15 @@ except KeyError:
 # Configuration
 class Config:
     LOGO_SIZE_PERCENT = 0.5
-    LOGO_TRANSPARENCY = 0.45
+    LOGO_TRANSPARENCY = 0.7  # Increased for better visibility
+    LOGO_OFFSET_PERCENT = 0.05
     DEFAULT_MAX_EXECUTIONS = 27
     EXECUTION_COLLECTION = "executions"
     LICENSE_COLLECTION = "licenses"
     FOLDERS = ["Logos", "Media", "Logoed_Media", "Blur_Preview"]
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    CONFIDENCE_THRESHOLD = 0.5  # Higher for MediaPipe
-    BLUR_KERNEL_FACTOR = 0.1  # Kernel size as fraction of face width
+    CONFIDENCE_THRESHOLD = 0.3  # Lowered for better detection
+    BLUR_KERNEL_FACTOR = 0.15  # Increased for noticeable blur
     YOLO_CONFIDENCE = 0.6
     USE_JAVASCRIPT_DOWNLOAD = False
     ADMIN_USER_ID = "CO9n9TnhWoclEtyuH8jfzsXs7tt2"
@@ -97,13 +98,11 @@ def ensure_directories(base_path):
 def initialize_ai_models():
     logging.info("Initializing AI models for face detection, landmarks, and body detection")
     try:
-        # MediaPipe Face Detection
         mp_face_detection = mp.solutions.face_detection
         State.face_detector = mp_face_detection.FaceDetection(
-            model_selection=1,  # Full-range model
+            model_selection=1,
             min_detection_confidence=Config.CONFIDENCE_THRESHOLD
         )
-        # MediaPipe Face Mesh
         mp_face_mesh = mp.solutions.face_mesh
         State.face_mesh = mp_face_mesh.FaceMesh(
             max_num_faces=10,
@@ -111,9 +110,7 @@ def initialize_ai_models():
             min_detection_confidence=Config.CONFIDENCE_THRESHOLD,
             min_tracking_confidence=0.5
         )
-        # YOLOv8 for body detection
-        State.yolo_model = YOLO("yolov8n.pt")  # Nano model for speed
-        # DeepSORT tracker
+        State.yolo_model = YOLO("yolov8n.pt")
         State.tracker = DeepSort(max_age=30, n_init=3, nn_budget=100)
         logging.info("AI models initialized successfully")
     except Exception as e:
@@ -122,7 +119,7 @@ def initialize_ai_models():
         State.face_mesh = None
         State.yolo_model = None
         State.tracker = None
-        st.warning("AI models failed to load. Blurring functionality will be disabled.")
+        st.warning("AI models failed to load. Blurring functionality disabled.")
 
 # Detect bodies using YOLO
 def detect_bodies(image, yolo_model):
@@ -130,7 +127,7 @@ def detect_bodies(image, yolo_model):
         logging.warning("YOLO model not loaded. Skipping body detection.")
         return []
     try:
-        results = yolo_model(image, classes=[0], conf=Config.YOLO_CONFIDENCE)  # Class 0: person
+        results = yolo_model(image, classes=[0], conf=Config.YOLO_CONFIDENCE)
         boxes = []
         for result in results:
             for box in result.boxes:
@@ -144,10 +141,12 @@ def detect_bodies(image, yolo_model):
 
 # Check if face is within or near a body
 def is_face_near_body(face_box, body_boxes, margin=0.2):
+    if not body_boxes:  # Fallback if no bodies detected
+        logging.info("No bodies detected, allowing all faces")
+        return True
     fx1, fy1, fx2, fy2 = face_box
     face_center = ((fx1 + fx2) / 2, (fy1 + fy2) / 2)
     for bx1, by1, bx2, by2 in body_boxes:
-        # Expand body box by margin
         bw, bh = bx2 - bx1, by2 - by1
         bx1_m, by1_m = bx1 - bw * margin, by1 - bh * margin
         bx2_m, by2_m = bx2 + bw * margin, by2 + bh * margin
@@ -159,8 +158,7 @@ def is_face_near_body(face_box, body_boxes, margin=0.2):
 def get_nose_tip_landmark(image, face_landmarks):
     if not face_landmarks:
         return None
-    # Nose tip landmark index (MediaPipe Face Mesh)
-    nose_tip_idx = 1  # Approximate nose tip
+    nose_tip_idx = 1
     landmark = face_landmarks.landmark[nose_tip_idx]
     h, w = image.shape[:2]
     return (int(landmark.x * w), int(landmark.y * h))
@@ -176,13 +174,11 @@ def process_frame(frame, face_detector, face_mesh, yolo_model, tracker, blur_ena
     output_frame = frame.copy()
     blurred_regions = []
 
-    # Detect bodies
     body_boxes = detect_bodies(rgb_frame, yolo_model)
-
-    # Detect faces
     face_results = face_detector.process(rgb_frame)
     detections = []
     if face_results.detections:
+        logging.info(f"Detected {len(face_results.detections)} faces")
         for detection in face_results.detections:
             bbox = detection.location_data.relative_bounding_box
             x1 = int(bbox.xmin * width)
@@ -190,12 +186,12 @@ def process_frame(frame, face_detector, face_mesh, yolo_model, tracker, blur_ena
             w = int(bbox.width * width)
             h = int(bbox.height * height)
             x2, y2 = x1 + w, y1 + h
-            # Filter faces near bodies
             if is_face_near_body((x1, y1, x2, y2), body_boxes):
                 conf = detection.score[0]
-                detections.append([[x1, y1, w, h], conf, 0])  # Format for DeepSORT
+                detections.append([[x1, y1, w, h], conf, 0])
+            else:
+                logging.info(f"Face at ({x1}, {y1}, {x2}, {y2}) filtered out (no body nearby)")
 
-    # Track faces
     tracks = tracker.update_tracks(detections, frame=rgb_frame)
     valid_faces = []
     for track in tracks:
@@ -205,62 +201,64 @@ def process_frame(frame, face_detector, face_mesh, yolo_model, tracker, blur_ena
         x1, y1, x2, y2 = bbox
         valid_faces.append((x1, y1, x2, y2, track.track_id))
 
-    # Process each tracked face
+    logging.info(f"Valid tracked faces: {len(valid_faces)}")
     for x1, y1, x2, y2, track_id in valid_faces:
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(width - 1, x2), min(height - 1, y2)
         if x2 <= x1 or y2 <= y1:
+            logging.warning(f"Invalid face bbox: ({x1}, {y1}, {x2}, {y2})")
             continue
 
-        # Get face landmarks
         face_roi = rgb_frame[y1:y2, x1:x2]
         if face_roi.size == 0:
+            logging.warning(f"Empty face ROI at ({x1}, {y1}, {x2}, {y2})")
             continue
         mesh_results = face_mesh.process(face_roi)
         nose_tip = None
         if mesh_results.multi_face_landmarks:
-            # Adjust landmarks to full frame
             for landmarks in mesh_results.multi_face_landmarks:
                 nose_tip = get_nose_tip_landmark(frame, landmarks)
                 if nose_tip:
                     nx, ny = nose_tip
-                    nx = nx + x1  # Adjust to full frame
+                    nx = nx + x1
                     ny = ny + y1
                     nose_tip = (nx, ny)
                     break
 
-        # Define blur region (top to nose tip or 75% of face height)
         blur_y2 = nose_tip[1] if nose_tip else y1 + int((y2 - y1) * 0.75)
         blur_y2 = min(blur_y2, y2)
         if blur_y2 <= y1:
+            logging.warning(f"Invalid blur region: y1={y1}, blur_y2={blur_y2}")
             continue
 
-        # Adaptive kernel size
         face_width = x2 - x1
         kernel_size = int(face_width * Config.BLUR_KERNEL_FACTOR)
-        kernel_size = max(5, kernel_size // 2 * 2 + 1)  # Ensure odd number
+        kernel_size = max(5, kernel_size // 2 * 2 + 1)
 
-        # Apply blur
         roi = output_frame[y1:blur_y2, x1:x2]
         if roi.size == 0:
+            logging.warning(f"Empty blur ROI at ({x1}, {y1}, {x2}, {blur_y2})")
             continue
         blurred_roi = cv2.GaussianBlur(roi, (kernel_size, kernel_size), 0)
-        # Feather edges
         mask = np.zeros_like(roi, dtype=np.uint8)
         mask_height = blur_y2 - y1
         gradient = np.linspace(1, 0, int(mask_height * 0.2)).reshape(-1, 1, 1)
         mask[:int(mask_height * 0.2)] = (gradient * 255).astype(np.uint8)
         mask[int(mask_height * 0.2):] = 255
-        blurred_roi = cv2.seamlessClone(blurred_roi, roi, mask, (roi.shape[1] // 2, roi.shape[0] // 2), cv2.NORMAL_CLONE)
-        output_frame[y1:blur_y2, x1:x2] = blurred_roi
+        try:
+            blurred_roi = cv2.seamlessClone(blurred_roi, roi, mask, (roi.shape[1] // 2, roi.shape[0] // 2), cv2.NORMAL_CLONE)
+            output_frame[y1:blur_y2, x1:x2] = blurred_roi
+        except Exception as e:
+            logging.error(f"Error in seamlessClone: {str(e)}")
+            continue
 
-        # Store for review
         blurred_regions.append({
             "bbox": (x1, y1, x2, blur_y2),
             "track_id": track_id,
             "frame": output_frame.copy()
         })
 
+    logging.info(f"Blur applied to {len(blurred_regions)} regions")
     return output_frame, blurred_regions
 
 # Process image for blurring
@@ -274,6 +272,48 @@ def process_image(image, face_detector, face_mesh, yolo_model, tracker, blur_ena
     processed = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
     logging.info(f"Blur applied to image: {len(blurred_regions)} faces detected")
     return Image.fromarray(processed).convert('RGBA'), blurred_regions
+
+# Overlay logo on image
+def overlay_logo_on_image(image, logo_path, position="center"):
+    try:
+        if image.mode != 'RGBA':
+            image = image.convert('RGBA')
+            logging.info("Converted image to RGBA")
+        logo = Image.open(logo_path).convert("RGBA")
+        img_width, img_height = image.size
+        max_logo_size = int(min(img_width, img_height) * Config.LOGO_SIZE_PERCENT)
+        logo.thumbnail((max_logo_size, max_logo_size), Image.Resampling.LANCZOS)
+        logo_array = np.array(logo)
+        logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
+        logo = Image.fromarray(logo_array)
+        offset = int(min(img_width, img_height) * Config.LOGO_OFFSET_PERCENT)
+        position_map = {
+            "top": ((img_width - logo.size[0]) // 2, offset),
+            "bottom": ((img_width - logo.size[0]) // 2, img_height - logo.size[1] - offset),
+            "left": (offset, (img_height - logo.size[1]) // 2),
+            "right": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
+            "top_left": (offset, offset),
+            "top_right": (img_width - logo.size[0] - offset, offset),
+            "left_center": (offset, (img_height - logo.size[1]) // 2),
+            "right_center": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
+            "left_bottom": (offset, img_height - logo.size[1] - offset),
+            "right_bottom": (img_width - logo.size[0] - offset, img_height - logo.size[1] - offset),
+            "center": ((img_width - logo.size[0]) // 2, (img_height - logo.size[1]) // 2)
+        }
+        x, y = position_map.get(position, position_map["center"])
+        x, y = max(0, x), max(0, y)
+        if x + logo.size[0] > img_width or y + logo.size[1] > img_height:
+            logging.warning(f"Logo position ({x}, {y}) adjusted to fit image")
+            x = min(x, img_width - logo.size[0])
+            y = min(y, img_height - logo.size[1])
+        output = Image.new("RGBA", image.size)
+        output.paste(image, (0, 0))
+        output.paste(logo, (x, y), logo)
+        logging.info(f"Logo overlaid at position ({x}, {y})")
+        return output
+    except Exception as e:
+        logging.error(f"Error overlaying logo on image: {str(e)}")
+        return image
 
 # Process video for blurring
 def process_video(video_path, output_path, face_detector, face_mesh, yolo_model, tracker, blur_enabled):
@@ -354,7 +394,6 @@ def review_blurred_regions(blurred_regions, media_type, base_path, media_name):
     os.makedirs(os.path.dirname(preview_path), exist_ok=True)
 
     if media_type == "image":
-        # Display the first blurred frame
         frame = blurred_regions[0]["frame"]
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         st.image(frame_rgb, caption="Blurred Image Preview", use_column_width=True)
@@ -366,7 +405,6 @@ def review_blurred_regions(blurred_regions, media_type, base_path, media_name):
                 approved = False
         cv2.imwrite(preview_path, frame)
     else:
-        # Sample 5 frames with blurred regions
         frame_indices = sorted(set(r["frame_idx"] for r in blurred_regions))
         sample_indices = frame_indices[::max(1, len(frame_indices) // 5)]
         for idx in sample_indices:
@@ -383,7 +421,6 @@ def review_blurred_regions(blurred_regions, media_type, base_path, media_name):
                 approve = st.checkbox("Approve this blur", value=True, key=f"approve_video_{idx}_{track_id}")
                 if not approve:
                     approved = False
-        # Save a sample frame
         if sample_indices:
             frame = blurred_regions[0]["frame"]
             cv2.imwrite(preview_path, frame)
@@ -636,39 +673,6 @@ def validate_patch(patch_id, user_id):
         st.error(f"Error applying patch: {str(e)}")
         return False
 
-# Overlay logo on image
-def overlay_logo_on_image(image, logo_path, position="center"):
-    try:
-        logo = Image.open(logo_path).convert("RGBA")
-        img_width, img_height = image.size
-        max_logo_size = int(min(img_width, img_height) * Config.LOGO_SIZE_PERCENT)
-        logo.thumbnail((max_logo_size, max_logo_size), Image.Resampling.LANCZOS)
-        logo_array = np.array(logo)
-        logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
-        logo = Image.fromarray(logo_array)
-        offset = int(min(img_width, img_height) * Config.LOGO_OFFSET_PERCENT)
-        position_map = {
-            "top": ((img_width - logo.size[0]) // 2, offset),
-            "bottom": ((img_width - logo.size[0]) // 2, img_height - logo.size[1] - offset),
-            "left": (offset, (img_height - logo.size[1]) // 2),
-            "right": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
-            "top_left": (offset, offset),
-            "top_right": (img_width - logo.size[0] - offset, offset),
-            "left_center": (offset, (img_height - logo.size[1]) // 2),
-            "right_center": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
-            "left_bottom": (offset, img_height - logo.size[1] - offset),
-            "right_bottom": (img_width - logo.size[0] - offset, img_height - logo.size[1] - offset),
-            "center": ((img_width - logo.size[0]) // 2, (img_height - logo.size[1]) // 2)
-        }
-        x, y = position_map.get(position, position_map["center"])
-        output = Image.new("RGBA", image.size)
-        output.paste(image, (0, 0))
-        output.paste(logo, (x, y), logo)
-        return output
-    except Exception as e:
-        logging.error(f"Error overlaying logo on image: {str(e)}")
-        return image
-
 # Overlay logo on video
 def overlay_logo_on_video(video_path, logo_path, output_path, position="center"):
     try:
@@ -811,7 +815,7 @@ def debug_license_limits(admin_user_id):
                     current_expiry = current_expiry.replace(tzinfo=timezone.utc)
                 if current_sub_expiry.tzinfo is None:
                     current_sub_expiry = current_sub_expiry.replace(tzinfo=timezone.utc)
-                st.write(f"Current Count: {current_count}")
+                st.write信号(f"Current Count: {current_count}")
                 st.write(f"Current Max Executions: {current_max}")
                 st.write(f"Infinite Count Enabled: {current_infinite}")
                 st.write(f"Current License Expiry: {current_expiry}")
@@ -941,7 +945,6 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    # Initialize session state
     if "user" not in st.session_state:
         st.session_state.user = None
         st.session_state.user_id = None
@@ -962,7 +965,6 @@ def main():
 
     logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}")
 
-    # Authentication
     if not st.session_state.user:
         st.subheader("Login")
         email = st.text_input("Email")
@@ -1013,14 +1015,12 @@ def main():
                 st.error(st.session_state.reset_message)
         return
 
-    # Sync user_id
     if st.session_state.user and not st.session_state.user_id:
         st.session_state.user_id = st.session_state.user
         logging.info(f"Synced user_id from user: {st.session_state.user_id}")
 
     logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}")
 
-    # Check license
     license_valid = check_license(st.session_state.user_id, force_refresh=True)
     if st.session_state.user_id != Config.ADMIN_USER_ID and not st.session_state.patch_applied and not license_valid:
         st.subheader("Apply Patch")
@@ -1037,22 +1037,18 @@ def main():
         st.session_state.patch_applied = False
         logging.info(f"Patch applied and license check passed for user {st.session_state.user_id}, cleared patch_applied flag")
 
-    # Initialize AI models
     if any(model is None for model in [State.face_detector, State.face_mesh, State.yolo_model, State.tracker]):
         initialize_ai_models()
         if any(model is None for model in [State.face_detector, State.face_mesh, State.yolo_model, State.tracker]):
-            st.warning("AI models failed to load. Blurring functionality will be disabled.")
+            st.warning("AI models failed to load. Blurring functionality disabled.")
 
-    # Admin debug tools
     if st.session_state.user_id == Config.ADMIN_USER_ID:
         debug_license_limits(st.session_state.user_id)
 
-    # File upload and processing
     st.subheader("Upload Files")
     base_path = "temp_files"
     ensure_directories(base_path)
 
-    # Logo upload
     st.subheader("Upload Logo")
     logo_file = st.file_uploader("Upload Logo (PNG)", type=["png"], key="logo")
     if logo_file:
@@ -1062,20 +1058,18 @@ def main():
         st.session_state.logo_file = logo_file
         st.success(f"Logo {logo_file.name} uploaded successfully.")
 
-    # Media file upload
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
     st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.blur_enabled)
 
-    # Update session state and increment count
     if media_files:
         new_files = [f for f in media_files if f.name not in [mf.name for mf in st.session_state.media_files]]
         for media_file in new_files:
             increment_execution(st.session_state.user_id, media_file.name)
         st.session_state.media_files = media_files
+        st.session_state.blur_reviewed = {}  # Clear previous reviews
         if new_files:
             st.rerun()
 
-    # Logo position selection
     st.subheader("Logo Position")
     col1, col2, col3, col4, col5 = st.columns(5)
     positions = ["top", "center", "bottom", "left", "right"]
@@ -1098,7 +1092,6 @@ def main():
 
     st.write(f"Selected Logo Position: **{st.session_state.logo_position.capitalize()}**")
 
-    # Display existing logoed files
     if st.session_state.processed_files_data:
         st.subheader("Download Logoed Files")
         for file_path, original_name, file_data in st.session_state.processed_files_data:
@@ -1122,7 +1115,6 @@ def main():
                     logging.info("Download All Files initiated")
                     st.rerun()
 
-    # Handle Download All Files
     if not Config.USE_JAVASCRIPT_DOWNLOAD and st.session_state.download_all_trigger and st.session_state.processed_files_data:
         index = st.session_state.download_all_index
         if index is None or index >= len(st.session_state.processed_files_data):
@@ -1144,7 +1136,6 @@ def main():
             logging.info(f"Updated download_all_index to {st.session_state.download_all_index}")
             st.rerun()
 
-    # Start Logoing
     if st.session_state.logo_file and st.session_state.media_files:
         if st.button("Start Logoing", key="start_logoing", type="primary"):
             st.session_state.logoed_files = []
@@ -1160,7 +1151,6 @@ def main():
                 media_path = os.path.join(base_path, "Media", media_file.name)
                 output_filename = f"logoed_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{media_file.name}"
                 output_path = os.path.join(base_path, "Logoed_Media", output_filename)
-                intermediate_path = os.path.join(base_path, "Media", f"blurred_{media_file.name}")
                 with open(media_path, "wb") as f:
                     f.write(media_file.getbuffer())
                 try:
@@ -1168,16 +1158,33 @@ def main():
                     blurred_regions = []
                     if media_type == "image":
                         image = Image.open(media_path).convert("RGBA")
-                        blurred_image, blurred_regions = process_image(
-                            image,
-                            State.face_detector,
-                            State.face_mesh,
-                            State.yolo_model,
-                            State.tracker,
-                            st.session_state.blur_enabled
-                        )
-                        blurred_image.save(intermediate_path, "PNG")
+                        if st.session_state.blur_enabled:
+                            blurred_image, blurred_regions = process_image(
+                                image,
+                                State.face_detector,
+                                State.face_mesh,
+                                State.yolo_model,
+                                State.tracker,
+                                st.session_state.blur_enabled
+                            )
+                            # Preview blurred image
+                            st.image(blurred_image, caption="Blur Preview (Before Logo)", use_column_width=True)
+                        else:
+                            blurred_image = image
+                        if st.session_state.blur_enabled and blurred_regions:
+                            if media_file.name not in st.session_state.blur_reviewed:
+                                approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
+                                st.session_state.blur_reviewed[media_file.name] = approved
+                                if not approved:
+                                    st.error(f"Blur review not approved for {media_file.name}. Please adjust and reprocess.")
+                                    continue
+                        output_image = overlay_logo_on_image(blurred_image, logo_path, st.session_state.logo_position)
+                        output_image.save(output_path, "PNG")
+                        with open(output_path, "rb") as f:
+                            file_data = f.read()
+                        processed_files.append((output_path, media_file.name, file_data))
                     else:
+                        intermediate_path = os.path.join(base_path, "Media", f"blurred_{media_file.name}")
                         blurred_regions = process_video(
                             media_path,
                             intermediate_path,
@@ -1187,34 +1194,22 @@ def main():
                             State.tracker,
                             st.session_state.blur_enabled
                         )
-                    
-                    # Review blurred regions
-                    if st.session_state.blur_enabled and blurred_regions:
-                        if media_file.name not in st.session_state.blur_reviewed:
-                            approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
-                            st.session_state.blur_reviewed[media_file.name] = approved
-                            if not approved:
-                                st.error(f"Blur review not approved for {media_file.name}. Please adjust and reprocess.")
-                                continue
-                    
-                    if media_type == "image":
-                        image = Image.open(intermediate_path).convert("RGBA")
-                        output_image = overlay_logo_on_image(image, logo_path, st.session_state.logo_position)
-                        output_image.save(output_path, "PNG")
+                        if st.session_state.blur_enabled and blurred_regions:
+                            if media_file.name not in st.session_state.blur_reviewed:
+                                approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
+                                st.session_state.blur_reviewed[media_file.name] = approved
+                                if not approved:
+                                    st.error(f"Blur review not approved for {media_file.name}. Please adjust and reprocess.")
+                                    continue
+                        overlay_logo_on_video(intermediate_path if os.path.exists(intermediate_path) else media_path, logo_path, output_path, st.session_state.logo_position)
                         with open(output_path, "rb") as f:
                             file_data = f.read()
                         processed_files.append((output_path, media_file.name, file_data))
-                    else:
-                        overlay_logo_on_video(intermediate_path, logo_path, output_path, st.session_state.logo_position)
-                        with open(output_path, "rb") as f:
-                            file_data = f.read()
-                        processed_files.append((output_path, media_file.name, file_data))
+                        if os.path.exists(intermediate_path):
+                            os.remove(intermediate_path)
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {e}")
                     logging.error(f"Error processing {media_file.name}: {str(e)}")
-                finally:
-                    if os.path.exists(intermediate_path):
-                        os.remove(intermediate_path)
             st.session_state.logoed_files = [(file_path, original_name) for file_path, original_name, _ in processed_files]
             st.session_state.processed_files_data = processed_files
             st.subheader("Download Logoed Files")
@@ -1233,7 +1228,6 @@ def main():
                 else:
                     st.button("Download All Files", key=f"download_all_btn_{uuid.uuid4()}", help="Download all logoed files")
 
-    # Debug session state (admin only)
     if st.session_state.user_id == Config.ADMIN_USER_ID:
         st.subheader("Debug Session State")
         st.write(f"user: {st.session_state.user}")
@@ -1253,7 +1247,6 @@ def main():
         st.write(f"State.subscription_expiry: {State.subscription_expiry}")
         logging.info(f"Debug output displayed for admin: user={st.session_state.user}")
 
-    # Admin panel
     if st.session_state.user_id == Config.ADMIN_USER_ID:
         st.subheader("Admin: Generate Patch")
         target_user = st.text_input("Target User ID")
