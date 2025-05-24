@@ -72,7 +72,7 @@ class Config:
     FOLDERS = ["Logos", "Media", "Logoed_Media", "Blur_Preview"]
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CONFIDENCE_THRESHOLD = 0.2
-    BLUR_KERNEL_FACTOR = 0.15
+    BLUR_KERNEL_FACTOR = 0.3
     YOLO_CONFIDENCE = 0.6
     USE_JAVASCRIPT_DOWNLOAD = False
     ADMIN_USER_ID = "CO9n9TnhWoclEtyuH8jfzsXs7tt2"
