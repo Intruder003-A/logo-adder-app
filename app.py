@@ -1039,7 +1039,7 @@ def debug_license_limits(admin_user_id):
             st.error(f"Error accessing Firestore for user {target_user_id}: {str(e)}")
     elif target_user_id:
         st.warning("Firestore unavailable. Debug tools limited.")
- def main():
+def main():
     st.set_page_config(page_title="Logo Adder App", layout="wide")
     st.title("Logo Adder App")
 
