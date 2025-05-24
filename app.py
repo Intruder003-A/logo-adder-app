@@ -1049,19 +1049,19 @@ def main():
     if 'patch_applied' not in st.session_state:
         st.session_state.patch_applied = False
     if 'blur_enabled' not in st.session_state:
-        st.session_state.blur_enabled = False  # Default to disabled
+        st.session_state.blur_enabled = False
     if 'logo_positions' not in st.session_state:
         st.session_state.logo_positions = {}
     if 'manual_positioning' not in st.session_state:
-        st.session_state.manual_positioning = False  # Default to disabled
+        st.session_state.manual_positioning = False
     if 'selected_position' not in st.session_state:
-        st.session_state.selected_position = "Center"  # Default position
+        st.session_state.selected_position = "Center"
     if 'auth_error' not in st.session_state:
         st.session_state.auth_error = None
     if 'reset_message' not in st.session_state:
         st.session_state.reset_message = None
     if 'output_files' not in st.session_state:
-        st.session_state.output_files = []  # Store processed files for download
+        st.session_state.output_files = []
     logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
     logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}, blur_enabled={st.session_state.blur_enabled}, manual_positioning={st.session_state.manual_positioning}")
 
@@ -1282,6 +1282,7 @@ def main():
                 with col_controls:
                     st.markdown("**Adjust Logo Settings**")
                     def update_position():
+                        logging.info(f"Slider updated for {media_key}: x_pos={st.session_state.logo_positions[media_key]['x_pos']}, y_pos={st.session_state.logo_positions[media_key]['y_pos']}")
                         st.rerun()
                     
                     x_pos = st.slider(
@@ -1327,11 +1328,13 @@ def main():
                         "rotation": rotation
                     })
                     
-                    # Click-to-position functionality
-                    st.markdown("**Click on Preview to Position Logo**")
-                    click_position = st.text_input("Click Position (X, Y)", "", key=f"click_pos_{safe_media_key}", disabled=True)
+                    # Click-to-position and drag functionality
+                    st.markdown("**Click or Drag Logo to Position**")
+                    click_position = st.text_input("Click/Drag Position (X, Y)", "", key=f"click_pos_{safe_media_key}", disabled=True)
                 
                 with col_preview:
+                    # Generate preview with debug logging
+                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}")
                     preview_bytes = generate_preview_image(
                         media_file,
                         logo_path,
@@ -1342,33 +1345,58 @@ def main():
                     if preview_bytes:
                         st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
                         
-                        # JavaScript for click-to-position with sanitized ID and existence check
+                        # JavaScript for click-to-position and drag
                         js_code = f"""
                         <script>
+                        let isDragging_{safe_media_key} = false;
+                        let currentX_{safe_media_key} = 0;
+                        let currentY_{safe_media_key} = 0;
+
+                        function startDrag_{safe_media_key}(event) {{
+                            event.preventDefault();
+                            isDragging_{safe_media_key} = true;
+                            updatePosition_{safe_media_key}(event);
+                        }}
+
+                        function drag_{safe_media_key}(event) {{
+                            if (isDragging_{safe_media_key}) {{
+                                updatePosition_{safe_media_key}(event);
+                            }}
+                        }}
+
+                        function stopDrag_{safe_media_key}() {{
+                            isDragging_{safe_media_key} = false;
+                        }}
+
                         function updatePosition_{safe_media_key}(event) {{
-                            const img = event.target;
+                            const img = document.getElementById('preview_{safe_media_key}');
                             const rect = img.getBoundingClientRect();
                             const x = event.clientX - rect.left;
                             const y = event.clientY - rect.top;
                             const scaleX = 1000 / rect.width;
                             const scaleY = 1000 / rect.height;
-                            const scaledX = Math.round(x * scaleX);
-                            const scaledY = Math.round(y * scaleY);
+                            const scaledX = Math.round(Math.max(0, Math.min(1000, x * scaleX)));
+                            const scaledY = Math.round(Math.max(0, Math.min(1000, y * scaleY)));
                             const input = document.querySelector('[data-click-pos="{safe_media_key}"]');
                             if (input) {{
-                                input.value = `({{scaledX}}, {{scaledY}})`;
-                                // Update sliders via Streamlit
+                                input.value = `(${scaledX}, ${scaledY})`;
                                 window.Streamlit.setComponentValue('x_pos_{safe_media_key}', scaledX);
                                 window.Streamlit.setComponentValue('y_pos_{safe_media_key}', scaledY);
                             }} else {{
                                 console.error('Input element for {safe_media_key} not found');
                             }}
                         }}
+
+                        // Ensure drag stops even if mouse leaves window
+                        document.addEventListener('mouseup', stopDrag_{safe_media_key});
                         </script>
-                        <img src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
-                             onclick="updatePosition_{safe_media_key}(event)"
+                        <img id="preview_{safe_media_key}" 
+                             src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
+                             onmousedown="startDrag_{safe_media_key}(event)"
+                             onmousemove="drag_{safe_media_key}(event)"
+                             onmouseup="stopDrag_{safe_media_key}()"
                              data-click-pos="{safe_media_key}"
-                             style="cursor: crosshair; max-width: 100%;">
+                             style="cursor: move; max-width: 100%;">
                         """
                         st.markdown(js_code, unsafe_allow_html=True)
                     else:
