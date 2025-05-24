@@ -1070,7 +1070,7 @@ def main():
         }
         #logo-canvas {
             border: 2px solid #ccc;
-            cursor: crosshair;
+            cursor: move;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -1092,7 +1092,9 @@ def main():
         st.session_state.patch_applied = False
         st.session_state.blur_reviewed = {}
         st.session_state.manual_positioning = False
-        st.session_state.custom_logo_position = None
+        st.session_state.logo_positions = {}  # Dict to store {media_name: (x, y)}
+        st.session_state.current_media_index = 0
+        st.session_state.all_positions_set = False
         st.session_state.preview_image = None
         logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
 
@@ -1201,105 +1203,153 @@ def main():
             increment_execution(st.session_state.user_id, media_file.name)
         st.session_state.media_files = media_files
         st.session_state.blur_reviewed = {}
+        st.session_state.logo_positions = {f.name: st.session_state.logo_positions.get(f.name, None) for f in media_files}
+        st.session_state.current_media_index = min(st.session_state.current_media_index, len(media_files) - 1)
+        st.session_state.all_positions_set = all(pos is not None for pos in st.session_state.logo_positions.values())
         if new_files:
             st.rerun()
 
-    st.subheader("Logo Position")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    positions = ["top", "center", "bottom", "left", "right"]
-    for col, pos in zip([col1, col2, col3, col4, col5], positions):
-        with col:
-            button_style = "background-color: #4CAF50; color: white; padding: 10px; border-radius: 5px; border: none; cursor: pointer;"
-            if st.session_state.logo_position == pos:
-                button_style = "background-color: #45a049; color: white; padding: 10px; border-radius: 5px; border: 2px solid #000;"
-            if st.button(pos.capitalize(), key=f"pos_{pos}", help=f"Place logo at {pos}"):
-                st.session_state.logo_position = pos
-                st.session_state.custom_logo_position = None  # Reset custom position
-
-    advanced_position = st.selectbox(
-        "Advanced Logo Position",
-        ["Select Advanced Position", "top_left", "top_right", "left_center", "right_center", "left_bottom", "right_bottom"],
-        index=0,
-        key="advanced_position"
-    )
-    if advanced_position != "Select Advanced Position":
-        st.session_state.logo_position = advanced_position
-        st.session_state.custom_logo_position = None  # Reset custom position
-
-    st.session_state.manual_positioning = st.checkbox("Enable Manual Logo Positioning", value=st.session_state.manual_positioning)
-    if st.session_state.manual_positioning and st.session_state.logo_file and st.session_state.media_files:
+    st.session_state.manual_positioning = st.checkbox("Enable Manual Logo Positioning", value=True, disabled=True)
+    if st.session_state.logo_file and st.session_state.media_files:
         st.subheader("Manual Logo Positioning")
+        if st.session_state.current_media_index >= len(st.session_state.media_files):
+            st.session_state.current_media_index = 0
+        media_file = st.session_state.media_files[st.session_state.current_media_index]
+        st.write(f"Positioning logo for: **{media_file.name}** ({st.session_state.current_media_index + 1} of {len(st.session_state.media_files)})")
         logo_path = os.path.join(base_path, "Logos", st.session_state.logo_file.name)
-        media_file = st.session_state.media_files[0]  # Use first media file for preview
-        preview_data = generate_preview_image(media_file, logo_path, st.session_state.logo_position, st.session_state.custom_logo_position)
-        if preview_data:
-            st.session_state.preview_image = preview_data
-            preview_b64 = base64.b64encode(preview_data).decode('utf-8')
-            js_code = f"""
-            <style>
-                #logo-canvas {{
-                    border: 2px solid #ccc;
-                    cursor: crosshair;
+        # Generate media and logo base64 for JavaScript
+        media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
+        if media_type == "image":
+            img = Image.open(media_file).convert("RGBA")
+            if st.session_state.blur_enabled and State.blur_enabled:
+                img, _ = process_image(img, State.dnn_net, st.session_state.blur_enabled)
+            img.thumbnail(Config.PREVIEW_SIZE, Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            media_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+            orig_width, orig_height = Image.open(media_file).size
+        else:
+            video = VideoFileClip(media_file)
+            frame = video.get_frame(0)
+            video.close()
+            img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+            if st.session_state.blur_enabled and State.blur_enabled:
+                frame, _ = process_frame(frame, State.face_detector, State.face_mesh, State.yolo_model, State.tracker, st.session_state.blur_enabled)
+                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+            img.thumbnail(Config.PREVIEW_SIZE, Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            media_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+            orig_width, orig_height = VideoFileClip(media_file).size
+        logo_img = Image.open(logo_path).convert("RGBA")
+        max_logo_size = int(min(Config.PREVIEW_SIZE[0], Config.PREVIEW_SIZE[1]) * Config.LOGO_SIZE_PERCENT)
+        logo_img.thumbnail((max_logo_size, max_logo_size), Image.Resampling.LANCZOS)
+        logo_array = np.array(logo_img)
+        logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
+        logo_img = Image.fromarray(logo_array)
+        buf = io.BytesIO()
+        logo_img.save(buf, format="PNG")
+        logo_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+        # JavaScript for click-and-drag
+        initial_x, initial_y = st.session_state.logo_positions.get(media_file.name, (Config.PREVIEW_SIZE[0] // 2, Config.PREVIEW_SIZE[1] // 2))
+        js_code = f"""
+        <style>
+            #logo-canvas {{
+                border: 2px solid #ccc;
+                cursor: move;
+            }}
+        </style>
+        <script>
+            function setupCanvas() {{
+                const canvas = document.getElementById('logo-canvas');
+                const ctx = canvas.getContext('2d');
+                const mediaImg = new Image();
+                const logoImg = new Image();
+                let isDragging = false;
+                let logoX = {initial_x};
+                let logoY = {initial_y};
+                mediaImg.src = 'data:image/png;base64,{media_b64}';
+                logoImg.src = 'data:image/png;base64,{logo_b64}';
+                let imagesLoaded = 0;
+                function draw() {{
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(mediaImg, 0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(logoImg, logoX - logoImg.width / 2, logoY - logoImg.height / 2);
                 }}
-            </style>
-            <script>
-                function setupCanvas() {{
-                    const canvas = document.getElementById('logo-canvas');
-                    const ctx = canvas.getContext('2d');
-                    const img = new Image();
-                    img.src = 'data:image/png;base64,{preview_b64}';
-                    img.onload = () => {{
+                function onImageLoad() {{
+                    imagesLoaded++;
+                    if (imagesLoaded === 2) {{
                         canvas.width = {Config.PREVIEW_SIZE[0]};
                         canvas.height = {Config.PREVIEW_SIZE[1]};
-                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    }};
-                    canvas.addEventListener('click', (e) => {{
+                        draw();
+                    }}
+                }}
+                mediaImg.onload = onImageLoad;
+                logoImg.onload = onImageLoad;
+                mediaImg.onerror = () => console.error('Failed to load media image');
+                logoImg.onerror = () => console.error('Failed to load logo image');
+                canvas.addEventListener('mousedown', (e) => {{
+                    const rect = canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    if (x >= logoX - logoImg.width / 2 && x <= logoX + logoImg.width / 2 &&
+                        y >= logoY - logoImg.height / 2 && y <= logoY + logoImg.height / 2) {{
+                        isDragging = true;
+                    }}
+                }});
+                canvas.addEventListener('mousemove', (e) => {{
+                    if (isDragging) {{
                         const rect = canvas.getBoundingClientRect();
-                        const x = e.clientX - rect.left;
-                        const y = e.clientY - rect.top;
-                        document.getElementById('logo-position').value = `${{x}},${{y}}`;
+                        logoX = e.clientX - rect.left;
+                        logoY = e.clientY - rect.top;
+                        logoX = Math.max(logoImg.width / 2, Math.min(canvas.width - logoImg.width / 2, logoX));
+                        logoY = Math.max(logoImg.height / 2, Math.min(canvas.height - logoImg.height / 2, logoY));
+                        document.getElementById('logo-position').value = `${{logoX}},${{logoY}}`;
+                        draw();
+                    }}
+                }});
+                canvas.addEventListener('mouseup', () => {{
+                    if (isDragging) {{
+                        isDragging = false;
                         const event = new Event('change');
                         document.getElementById('logo-position').dispatchEvent(event);
-                    }});
-                }}
-                window.onload = setupCanvas;
-            </script>
-            <canvas id="logo-canvas" width="{Config.PREVIEW_SIZE[0]}" height="{Config.PREVIEW_SIZE[1]}"></canvas>
-            <input type="hidden" id="logo-position" onchange="this.form.submit()">
-            """
-            st.markdown(js_code, unsafe_allow_html=True)
-            position_input = st.text_input("Logo Position (x, y)", value="", key="logo_position_input", disabled=True)
-            if position_input:
-                try:
-                    x, y = map(int, position_input.split(','))
-                    # Scale coordinates to original image size
-                    media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
-                    if media_type == "image":
-                        img = Image.open(media_file)
-                        orig_width, orig_height = img.size
-                    else:
-                        video = VideoFileClip(media_file)
-                        orig_width, orig_height = video.size
-                        video.close()
-                    scale_x = orig_width / Config.PREVIEW_SIZE[0]
-                    scale_y = orig_height / Config.PREVIEW_SIZE[1]
-                    scaled_x = int(x * scale_x)
-                    scaled_y = int(y * scale_y)
-                    st.session_state.custom_logo_position = (scaled_x, scaled_y)
-                    # Update preview with new position
-                    preview_data = generate_preview_image(media_file, logo_path, custom_position=st.session_state.custom_logo_position)
-                    if preview_data:
-                        st.session_state.preview_image = preview_data
-                except ValueError:
-                    st.error("Invalid position format. Use 'x,y' (e.g., '100,200').")
-            if st.button("Save Logo Position"):
-                if st.session_state.custom_logo_position:
-                    st.success(f"Logo position saved at ({st.session_state.custom_logo_position[0]}, {st.session_state.custom_logo_position[1]})")
+                    }}
+                }});
+                canvas.addEventListener('mouseleave', () => {{
+                    isDragging = false;
+                }});
+            }}
+            window.addEventListener('load', setupCanvas);
+        </script>
+        <canvas id="logo-canvas" width="{Config.PREVIEW_SIZE[0]}" height="{Config.PREVIEW_SIZE[1]}"></canvas>
+        <input type="hidden" id="logo-position" onchange="this.form.submit()">
+        """
+        st.markdown(js_code, unsafe_allow_html=True)
+        position_input = st.text_input("Logo Position (x, y)", value=f"{initial_x},{initial_y}", key=f"logo_position_input_{st.session_state.current_media_index}", disabled=True)
+        if position_input:
+            try:
+                x, y = map(float, position_input.split(','))
+                scale_x = orig_width / Config.PREVIEW_SIZE[0]
+                scale_y = orig_height / Config.PREVIEW_SIZE[1]
+                scaled_x = int(x * scale_x)
+                scaled_y = int(y * scale_y)
+                st.session_state.logo_positions[media_file.name] = (scaled_x, scaled_y)
+            except ValueError:
+                st.error("Invalid position format. Use 'x,y' (e.g., '100,200').")
+        if st.button("Save and Continue"):
+            if media_file.name in st.session_state.logo_positions and st.session_state.logo_positions[media_file.name]:
+                st.success(f"Logo position saved for {media_file.name} at ({st.session_state.logo_positions[media_file.name][0]}, {st.session_state.logo_positions[media_file.name][1]})")
+                st.session_state.current_media_index += 1
+                if st.session_state.current_media_index >= len(st.session_state.media_files):
+                    st.session_state.all_positions_set = True
+                    st.session_state.current_media_index = 0
                 else:
-                    st.warning("Please click on the image to set a logo position.")
-                    st.session_state.custom_logo_position = None
+                    st.session_state.all_positions_set = False
+                st.rerun()
+            else:
+                st.warning("Please set a logo position before saving.")
 
-    st.write(f"Selected Logo Position: **{st.session_state.logo_position.capitalize() if not st.session_state.manual_positioning or not st.session_state.custom_logo_position else 'Manual'}**")
+    st.write(f"Manual Positioning: **{'Complete' if st.session_state.all_positions_set else 'In Progress'}**")
 
     if st.session_state.processed_files_data:
         st.subheader("Download Logoed Files")
@@ -1345,7 +1395,7 @@ def main():
             logging.info(f"Updated download_all_index to {st.session_state.download_all_index}")
             st.rerun()
 
-    if st.session_state.logo_file and st.session_state.media_files:
+    if st.session_state.logo_file and st.session_state.media_files and st.session_state.all_positions_set:
         if st.button("Start Logoing", key="start_logoing", type="primary"):
             st.session_state.logoed_files = []
             st.session_state.processed_files_data = []
@@ -1365,6 +1415,10 @@ def main():
                 try:
                     media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
                     blurred_regions = []
+                    custom_position = st.session_state.logo_positions.get(media_file.name)
+                    if not custom_position:
+                        st.error(f"No logo position set for {media_file.name}. Skipping.")
+                        continue
                     if media_type == "image":
                         image = Image.open(media_path).convert("RGBA")
                         if st.session_state.blur_enabled and State.blur_enabled:
@@ -1390,8 +1444,7 @@ def main():
                         final_image = overlay_logo_on_image(
                             image,
                             logo_path,
-                            position=st.session_state.logo_position,
-                            custom_position=st.session_state.custom_logo_position if st.session_state.manual_positioning else None
+                            custom_position=custom_position
                         )
                         final_image.save(output_path, "PNG")
                         logging.info(f"Image processed: {output_path}")
@@ -1424,8 +1477,7 @@ def main():
                             output_path,
                             logo_path,
                             output_path,
-                            position=st.session_state.logo_position,
-                            custom_position=st.session_state.custom_logo_position if st.session_state.manual_positioning else None
+                            custom_position=custom_position
                         )
                         logging.info(f"Video processed: {output_path}")
                     with open(output_path, "rb") as f:
