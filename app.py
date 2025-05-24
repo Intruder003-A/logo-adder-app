@@ -1268,12 +1268,33 @@ def main():
                 media_key = media_file.name
                 # Sanitize media_key for DOM ID
                 safe_media_key = ''.join(c if c.isalnum() else '_' for c in media_key).strip('_')
+                
+                # Calculate initial position based on preset
+                image = Image.open(media_file)
+                img_width, img_height = image.size
+                preset_positions = {
+                    "Center": (500, 500),
+                    "Top": (500, 100),
+                    "Bottom": (500, 900),
+                    "Left": (100, 500),
+                    "Right": (900, 500),
+                    "Top Left": (100, 100),
+                    "Top Right": (900, 100),
+                    "Left Center": (100, 500),
+                    "Right Center": (900, 500),
+                    "Left Bottom": (100, 900),
+                    "Right Bottom": (900, 900)
+                }
+                initial_x, initial_y = preset_positions.get(st.session_state.selected_position, (500, 500))
+                
+                # Initialize logo position with preset values
                 if media_key not in st.session_state.logo_positions:
                     st.session_state.logo_positions[media_key] = {
-                        "x_pos": 500,
-                        "y_pos": 500,
+                        "x_pos": initial_x,
+                        "y_pos": initial_y,
                         "scale": 1.0,
-                        "rotation": 0
+                        "rotation": 0,
+                        "opacity": 1.0
                     }
                 
                 st.markdown(f"### Positioning for {media_key}")
@@ -1282,7 +1303,7 @@ def main():
                 with col_controls:
                     st.markdown("**Adjust Logo Settings**")
                     def update_position():
-                        logging.info(f"Slider updated for {media_key}: x_pos={st.session_state.logo_positions[media_key]['x_pos']}, y_pos={st.session_state.logo_positions[media_key]['y_pos']}")
+                        logging.info(f"Slider updated for {media_key}: x_pos={st.session_state.logo_positions[media_key]['x_pos']}, y_pos={st.session_state.logo_positions[media_key]['y_pos']}, opacity={st.session_state.logo_positions[media_key]['opacity']}")
                         st.rerun()
                     
                     x_pos = st.slider(
@@ -1319,13 +1340,23 @@ def main():
                         key=f"rotation_{safe_media_key}",
                         on_change=update_position
                     )
+                    opacity = st.slider(
+                        "Opacity",
+                        0.0,
+                        1.0,
+                        st.session_state.logo_positions[media_key]["opacity"],
+                        step=0.05,
+                        key=f"opacity_{safe_media_key}",
+                        on_change=update_position
+                    )
                     
                     # Update session state
                     st.session_state.logo_positions[media_key].update({
                         "x_pos": x_pos,
                         "y_pos": y_pos,
                         "scale": scale,
-                        "rotation": rotation
+                        "rotation": rotation,
+                        "opacity": opacity
                     })
                     
                     # Click-to-position and drag functionality
@@ -1334,45 +1365,46 @@ def main():
                 
                 with col_preview:
                     # Generate preview with debug logging
-                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}")
+                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}, opacity={opacity}")
                     preview_bytes = generate_preview_image(
                         media_file,
                         logo_path,
                         custom_position=(x_pos, y_pos),
                         scale=scale,
-                        rotation=rotation
+                        rotation=rotation,
+                        opacity=opacity
                     )
                     if preview_bytes:
                         st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
                         
-                        # JavaScript for click-to-position and drag with debouncing
+                        # JavaScript for click-to-position and drag with debug logging
                         js_code = f"""
                         <script>
                         let isDragging_{safe_media_key} = false;
-                        let lastUpdateTime_{safe_media_key} = 0;
-                        const debounceDelay_{safe_media_key} = 100; // ms
 
                         function startDrag_{safe_media_key}(event) {{
                             event.preventDefault();
+ resposta de Grok 3:
+
+                            console.log('Start drag for {safe_media_key}');
                             isDragging_{safe_media_key} = true;
                             updatePosition_{safe_media_key}(event);
                         }}
 
                         function drag_{safe_media_key}(event) {{
                             if (isDragging_{safe_media_key}) {{
-                                const now = Date.now();
-                                if (now - lastUpdateTime_{safe_media_key} > debounceDelay_{safe_media_key}) {{
-                                    updatePosition_{safe_media_key}(event);
-                                    lastUpdateTime_{safe_media_key} = now;
-                                }}
+                                console.log('Dragging {safe_media_key}');
+                                updatePosition_{safe_media_key}(event);
                             }}
                         }}
 
                         function stopDrag_{safe_media_key}() {{
+                            console.log('Stop drag for {safe_media_key}');
                             isDragging_{safe_media_key} = false;
                         }}
 
                         function updatePosition_{safe_media_key}(event) {{
+                            console.log('Updating position for {safe_media_key}');
                             const img = document.getElementById('preview_{safe_media_key}');
                             const rect = img.getBoundingClientRect();
                             const x = event.clientX - rect.left;
@@ -1391,14 +1423,22 @@ def main():
                             }}
                         }}
 
-                        // Ensure drag stops even if mouse leaves window
+                        // Attach event listeners
+                        const img_{safe_media_key} = document.getElementById('preview_{safe_media_key}');
+                        if (img_{safe_media_key}) {{
+                            img_{safe_media_key}.addEventListener('mousedown', startDrag_{safe_media_key});
+                            img_{safe_media_key}.addEventListener('mousemove', drag_{safe_media_key});
+                            img_{safe_media_key}.addEventListener('mouseup', stopDrag_{safe_media_key});
+                            img_{safe_media_key}.addEventListener('mouseleave', stopDrag_{safe_media_key});
+                        }} else {{
+                            console.error('Image element for {safe_media_key} not found');
+                        }}
+
+                        // Ensure drag stops globally
                         document.addEventListener('mouseup', stopDrag_{safe_media_key});
                         </script>
                         <img id="preview_{safe_media_key}" 
                              src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
-                             onmousedown="startDrag_{safe_media_key}(event)"
-                             onmousemove="drag_{safe_media_key}(event)"
-                             onmouseup="stopDrag_{safe_media_key}()"
                              data-click-pos="{safe_media_key}"
                              style="cursor: move; max-width: 100%;">
                         """
@@ -1412,7 +1452,8 @@ def main():
                 custom_positions[media_key] = {
                     "position": (x_pos, y_pos),
                     "scale": scale,
-                    "rotation": rotation
+                    "rotation": rotation,
+                    "opacity": opacity
                 }
 
     # Face blurring option
@@ -1499,6 +1540,7 @@ def main():
                     custom_position = custom_positions.get(media_key, {}).get("position")
                     scale = custom_positions.get(media_key, {}).get("scale", 1.0)
                     rotation = custom_positions.get(media_key, {}).get("rotation", 0)
+                    opacity = custom_positions.get(media_key, {}).get("opacity", 1.0)
 
                     if media_type == "image":
                         image = Image.open(media_path).convert("RGBA")
@@ -1508,7 +1550,8 @@ def main():
                             position=position,
                             custom_position=custom_position,
                             scale=scale,
-                            rotation=rotation
+                            rotation=rotation,
+                            opacity=opacity
                         )
                         processed_image.save(output_path, "PNG")
                         logging.info(f"Processed image saved to {output_path}")
@@ -1520,7 +1563,8 @@ def main():
                             position=position,
                             custom_position=custom_position,
                             scale=scale,
-                            rotation=rotation
+                            rotation=rotation,
+                            opacity=opacity
                         )
                         logging.info(f"Processed video saved to {output_path}")
 
