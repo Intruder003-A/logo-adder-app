@@ -25,12 +25,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Initialize Firebase Admin SDK
 db = None
 try:
-    # Check if a Firebase app already exists
     try:
         firebase_admin.get_app()
         logging.info("Firebase Admin SDK already initialized, reusing existing app")
     except ValueError:
-        # No app exists, proceed with initialization
         try:
             firebase_credentials = st.secrets["firebase"]["credential"]
             cred_dict = json.loads(firebase_credentials)
@@ -82,7 +80,7 @@ class Config:
     ADMIN_USER_ID = "CO9n9TnhWoclEtyuH8jfzsXs7tt2"
     DNN_PROTO_PATH = os.path.join(BASE_DIR, "models", "deploy.prototxt")
     DNN_MODEL_PATH = os.path.join(BASE_DIR, "models", "res10_300x300_ssd_iter_140000.caffemodel")
-    PREVIEW_SIZE = (600, 400)  # Size for manual positioning preview
+    PREVIEW_SIZE = (600, 400)
 
 # State management
 class State:
@@ -464,16 +462,18 @@ def review_blurred_regions(blurred_regions, media_type, base_path, media_name):
         st.warning("Some blurred regions were not approved. Please adjust or reprocess.")
     return approved
 
-# Overlay logo on image
-def overlay_logo_on_image(image, logo_path, position="center", custom_position=None):
+# Overlay logo on image with scaling and rotation
+def overlay_logo_on_image(image, logo_path, position="center", custom_position=None, scale=1.0, rotation=0):
     try:
         if image.mode != 'RGBA':
             image = image.convert('RGBA')
             logging.info("Converted image to RGBA")
         logo = Image.open(logo_path).convert("RGBA")
         img_width, img_height = image.size
-        max_logo_size = int(min(img_width, img_height) * Config.LOGO_SIZE_PERCENT)
+        max_logo_size = int(min(img_width, img_height) * Config.LOGO_SIZE_PERCENT * scale)
         logo.thumbnail((max_logo_size, max_logo_size), Image.Resampling.LANCZOS)
+        if rotation != 0:
+            logo = logo.rotate(rotation, expand=True, resample=Image.Resampling.BICUBIC)
         logo_array = np.array(logo)
         logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
         logo = Image.fromarray(logo_array)
@@ -503,20 +503,22 @@ def overlay_logo_on_image(image, logo_path, position="center", custom_position=N
         output = Image.new("RGBA", image.size)
         output.paste(image, (0, 0))
         output.paste(logo, (x, y), logo)
-        logging.info(f"Logo overlaid at position ({x}, {y})")
+        logging.info(f"Logo overlaid at position ({x}, {y}), scale={scale}, rotation={rotation}")
         return output
     except Exception as e:
         logging.error(f"Error overlaying logo on image: {str(e)}")
         return image
 
-# Overlay logo on video
-def overlay_logo_on_video(video_path, logo_path, output_path, position="center", custom_position=None):
+# Overlay logo on video with scaling and rotation
+def overlay_logo_on_video(video_path, logo_path, output_path, position="center", custom_position=None, scale=1.0, rotation=0):
     try:
         video = VideoFileClip(video_path)
         logo = Image.open(logo_path).convert("RGBA")
         vid_width, vid_height = video.size
-        max_logo_size = int(min(vid_width, vid_height) * Config.LOGO_SIZE_PERCENT)
+        max_logo_size = int(min(vid_width, vid_height) * Config.LOGO_SIZE_PERCENT * scale)
         logo.thumbnail((max_logo_size, max_logo_size), Image.Resampling.LANCZOS)
+        if rotation != 0:
+            logo = logo.rotate(rotation, expand=True, resample=Image.Resampling.BICUBIC)
         logo_array = np.array(logo)
         logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
         logo = Image.fromarray(logo_array)
@@ -561,14 +563,14 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center",
         raise
 
 # Generate preview image for manual positioning
-def generate_preview_image(media_file, logo_path, position="center", custom_position=None):
+def generate_preview_image(media_file, logo_path, position="center", custom_position=None, scale=1.0, rotation=0):
     try:
         media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
         if media_type == "image":
             image = Image.open(media_file).convert("RGBA")
             if st.session_state.blur_enabled and State.blur_enabled:
                 image, _ = process_image(image, State.dnn_net, st.session_state.blur_enabled)
-            preview = overlay_logo_on_image(image, logo_path, position, custom_position)
+            preview = overlay_logo_on_image(image, logo_path, position, custom_position, scale, rotation)
         else:
             video = VideoFileClip(media_file)
             frame = video.get_frame(0)
@@ -577,9 +579,8 @@ def generate_preview_image(media_file, logo_path, position="center", custom_posi
             if st.session_state.blur_enabled and State.blur_enabled:
                 frame, _ = process_frame(frame, State.face_detector, State.face_mesh, State.yolo_model, State.tracker, st.session_state.blur_enabled)
                 image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
-            preview = overlay_logo_on_image(image, logo_path, position, custom_position)
+            preview = overlay_logo_on_image(image, logo_path, position, custom_position, scale, rotation)
         
-        # Resize for preview
         preview.thumbnail(Config.PREVIEW_SIZE, Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         preview.save(buf, format="PNG")
@@ -1039,6 +1040,7 @@ def debug_license_limits(admin_user_id):
             st.error(f"Error accessing Firestore for user {target_user_id}: {str(e)}")
     elif target_user_id:
         st.warning("Firestore unavailable. Debug tools limited.")
+
 def main():
     st.set_page_config(page_title="Logo Adder App", layout="wide")
     st.title("Logo Adder App")
@@ -1054,6 +1056,8 @@ def main():
         st.session_state.patch_applied = False
     if 'blur_enabled' not in st.session_state:
         st.session_state.blur_enabled = State.blur_enabled
+    if 'logo_positions' not in st.session_state:
+        st.session_state.logo_positions = {}
     logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
     logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}")
 
@@ -1100,6 +1104,7 @@ def main():
                 st.session_state.user = None
                 st.session_state.user_id = None
                 st.session_state.patch_applied = False
+                st.session_state.logo_positions = {}
                 st.success("Logged out successfully.")
                 logging.info(f"User logged out: {st.session_state.user}")
 
@@ -1158,23 +1163,92 @@ def main():
     # Logo position selection
     st.header("Logo Position")
     position_option = st.selectbox("Select Logo Position", ["Manual", "Center", "Top", "Bottom", "Left", "Right", "Top Left", "Top Right", "Left Center", "Right Center", "Left Bottom", "Right Bottom"], index=1)
-    custom_position = None
+    custom_positions = {}
     if position_option == "Manual" and media_files and logo_file:
         st.subheader("Manual Logo Positioning")
+        logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
+        with open(logo_path, "wb") as f:
+            f.write(logo_file.getbuffer())
+        
         for media_file in media_files:
-            st.write(f"Positioning for {media_file.name}")
-            preview_bytes = generate_preview_image(media_file, logo_file)
-            if preview_bytes:
-                st.image(preview_bytes, caption=f"Preview for {media_file.name}", use_container_width=True)
-                col1, col2 = st.columns(2)
-                with col1:
-                    x_pos = st.slider(f"X Position for {media_file.name}", 0, 1000, 500, key=f"x_pos_{media_file.name}")
-                with col2:
-                    y_pos = st.slider(f"Y Position for {media_file.name}", 0, 1000, 500, key=f"y_pos_{media_file.name}")
-                custom_position = (x_pos, y_pos)
-            else:
-                st.warning(f"Failed to generate preview for {media_file.name}. Using default position.")
-                position_option = "Center"
+            media_key = media_file.name
+            if media_key not in st.session_state.logo_positions:
+                st.session_state.logo_positions[media_key] = {
+                    "x_pos": 500,
+                    "y_pos": 500,
+                    "scale": 1.0,
+                    "rotation": 0
+                }
+            
+            st.markdown(f"### Positioning for {media_key}")
+            col_preview, col_controls = st.columns([3, 2])
+            
+            with col_controls:
+                st.markdown("**Adjust Logo Settings**")
+                x_pos = st.slider("X Position", 0, 1000, st.session_state.logo_positions[media_key]["x_pos"], key=f"x_pos_{media_key}")
+                y_pos = st.slider("Y Position", 0, 1000, st.session_state.logo_positions[media_key]["y_pos"], key=f"y_pos_{media_key}")
+                scale = st.slider("Scale", 0.5, 2.0, st.session_state.logo_positions[media_key]["scale"], step=0.1, key=f"scale_{media_key}")
+                rotation = st.slider("Rotation (degrees)", -180, 180, st.session_state.logo_positions[media_key]["rotation"], step=1, key=f"rotation_{media_key}")
+                
+                # Update session state
+                st.session_state.logo_positions[media_key].update({
+                    "x_pos": x_pos,
+                    "y_pos": y_pos,
+                    "scale": scale,
+                    "rotation": rotation
+                })
+                
+                # Click-to-position functionality
+                st.markdown("**Click on Preview to Position Logo**")
+                click_position = st.text_input("Click Position (X, Y)", "", key=f"click_pos_{media_key}", disabled=True)
+                
+            with col_preview:
+                preview_bytes = generate_preview_image(
+                    media_file,
+                    logo_path,
+                    custom_position=(x_pos, y_pos),
+                    scale=scale,
+                    rotation=rotation
+                )
+                if preview_bytes:
+                    st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
+                    
+                    # JavaScript for click-to-position
+                    js_code = f"""
+                    <script>
+                    function updatePosition_{media_key.replace('.', '_')}(event) {{
+                        const img = event.target;
+                        const rect = img.getBoundingClientRect();
+                        const x = event.clientX - rect.left;
+                        const y = event.clientY - rect.top;
+                        const scaleX = 1000 / rect.width;
+                        const scaleY = 1000 / rect.height;
+                        const scaledX = Math.round(x * scaleX);
+                        const scaledY = Math.round(y * scaleY);
+                        document.getElementById('click_pos_{media_key.replace('.', '_')}').value = `(${scaledX}, ${scaledY})`;
+                        // Update sliders
+                        window.Streamlit.setComponentValue('x_pos_{media_key.replace('.', '_')}', scaledX);
+                        window.Streamlit.setComponentValue('y_pos_{media_key.replace('.', '_')}', scaledY);
+                    }}
+                    </script>
+                    <img src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
+                         onclick="updatePosition_{media_key.replace('.', '_')}(event)"
+                         style="cursor: crosshair; max-width: 100%;">
+                    """
+                    st.markdown(js_code, unsafe_allow_html=True)
+                else:
+                    st.warning(f"Failed to generate preview for {media_key}. Please check file formats or try again.")
+                    position_option = "Center"
+                    break
+                
+            custom_positions[media_key] = {
+                "position": (x_pos, y_pos),
+                "scale": scale,
+                "rotation": rotation
+            }
+        
+        if position_option == "Center":
+            st.info("Reverted to Center position due to preview generation failure.")
 
     # Face blurring option
     st.header("Face Blurring")
@@ -1201,6 +1275,7 @@ def main():
                 output_filename = f"logoed_{media_file.name}"
                 output_path = os.path.join(Config.BASE_DIR, "Logoed_Media", output_filename)
                 media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
+                media_key = media_file.name
 
                 try:
                     # Apply face blurring
@@ -1222,16 +1297,41 @@ def main():
                             continue
 
                     # Overlay logo
+                    custom_position = custom_positions.get(media_key, {}).get("position")
+                    scale = custom_positions.get(media_key, {}).get("scale", 1.0)
+                    rotation = custom_positions.get(media_key, {}).get("rotation", 0)
                     if media_type == "image":
                         image = Image.open(media_path).convert("RGBA")
-                        output_image = overlay_logo_on_image(image, logo_path, position_option.lower().replace(" ", "_"), custom_position)
+                        output_image = overlay_logo_on_image(
+                            image,
+                            logo_path,
+                            position_option.lower().replace(" ", "_"),
+                            custom_position,
+                            scale,
+                            rotation
+                        )
                         output_image.save(output_path, "PNG")
                     else:
                         if not st.session_state.blur_enabled or not blurred_regions:
-                            overlay_logo_on_video(media_path, logo_path, output_path, position_option.lower().replace(" ", "_"), custom_position)
+                            overlay_logo_on_video(
+                                media_path,
+                                logo_path,
+                                output_path,
+                                position_option.lower().replace(" ", "_"),
+                                custom_position,
+                                scale,
+                                rotation
+                            )
                         else:
-                            # Video already processed with blur, overlay logo on blurred output
-                            overlay_logo_on_video(output_path, logo_path, output_path, position_option.lower().replace(" ", "_"), custom_position)
+                            overlay_logo_on_video(
+                                output_path,
+                                logo_path,
+                                output_path,
+                                position_option.lower().replace(" ", "_"),
+                                custom_position,
+                                scale,
+                                rotation
+                            )
 
                     # Increment execution count
                     increment_execution(st.session_state.user_id, media_file.name)
