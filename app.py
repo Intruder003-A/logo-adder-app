@@ -62,7 +62,7 @@ except KeyError:
 class Config:
     LOGO_SIZE_PERCENT = 0.5
     LOGO_TRANSPARENCY = 0.45
-    MAX_EXECUTIONS = 27
+    DEFAULT_MAX_EXECUTIONS = 27
     EXECUTION_COLLECTION = "executions"
     LICENSE_COLLECTION = "licenses"
     FOLDERS = ["Logos", "Media", "Logoed_Media"]
@@ -77,8 +77,11 @@ class Config:
 # State management
 class State:
     execution_count = 0
+    max_executions = Config.DEFAULT_MAX_EXECUTIONS
     license_expiry = None
+    subscription_expiry = None
     net = None
+    infinite_count = False
 
 # Ensure directories exist
 def ensure_directories(base_path):
@@ -206,9 +209,15 @@ def check_license(user_id):
         if not hasattr(st.session_state, 'local_execution_count'):
             st.session_state.local_execution_count = 0
         State.execution_count = st.session_state.local_execution_count
+        State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
         State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
-        if State.execution_count >= Config.MAX_EXECUTIONS:
+        State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+        State.infinite_count = False
+        if not State.infinite_count and State.execution_count >= State.max_executions:
             st.error("Execution limit reached. Contact the service team for a new patch.")
+            return False
+        if datetime.now(timezone.utc) > State.subscription_expiry:
+            st.error("Subscription expired. Contact the service team for a new patch.")
             return False
         return True
     try:
@@ -217,35 +226,59 @@ def check_license(user_id):
         if doc.exists:
             data = doc.to_dict()
             State.execution_count = data.get("count", 0)
+            State.max_executions = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
+            State.infinite_count = data.get("infinite_count", False)
             State.license_expiry = data.get("expiry", datetime.now(timezone.utc))
-            logging.info(f"License checked for user {user_id}: count={State.execution_count}, expiry={State.license_expiry}")
+            State.subscription_expiry = data.get("subscription_expiry", datetime.now(timezone.utc))
+            logging.info(f"License checked for user {user_id}: count={State.execution_count}, max={State.max_executions}, infinite={State.infinite_count}, expiry={State.license_expiry}, subscription_expiry={State.subscription_expiry}")
         else:
             State.execution_count = 0
+            State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+            State.infinite_count = False
             State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+            State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
             doc_ref.set({
                 "user_id": user_id,
                 "count": State.execution_count,
+                "max_executions": State.max_executions,
+                "infinite_count": State.infinite_count,
                 "expiry": State.license_expiry,
+                "subscription_expiry": State.subscription_expiry,
                 "created_at": datetime.now(timezone.utc)
             })
-            logging.info(f"New license created for user {user_id}: count=0, expiry={State.license_expiry}")
+            logging.info(f"New license created for user {user_id}: count=0, max={State.max_executions}, infinite={State.infinite_count}, expiry={State.license_expiry}, subscription_expiry={State.subscription_expiry}")
+        
         try:
+            # Check license expiry
             expiry = State.license_expiry
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) > expiry:
                 st.error("License expired. Contact the service team for a new patch.")
                 return False
+            
+            # Check subscription expiry
+            sub_expiry = State.subscription_expiry
+            if sub_expiry.tzinfo is None:
+                sub_expiry = sub_expiry.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > sub_expiry:
+                st.error("Subscription expired. Contact the service team for a new patch.")
+                return False
+                
+            # Check execution count
+            if not State.infinite_count and State.execution_count >= State.max_executions:
+                st.error("Execution limit reached. Contact the service team for a new patch.")
+                return False
+            return True
         except TypeError as e:
             logging.error(f"Datetime comparison error for user {user_id}: {str(e)}\n{traceback.format_exc()}")
-            st.error(f"Error checking license expiry: {str(e)}. Using local count temporarily.")
+            st.error(f"Error checking license/subscription expiry: {str(e)}. Using local count temporarily.")
             State.execution_count = getattr(st.session_state, 'local_execution_count', 0)
+            State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+            State.infinite_count = False
             State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+            State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
             return True
-        if State.execution_count >= Config.MAX_EXECUTIONS:
-            st.error("Execution limit reached. Contact the service team for a new patch.")
-            return False
-        return True
     except Exception as e:
         if "PERMISSION_DENIED" in str(e).upper():
             logging.error(f"Firestore permission denied for user {user_id}: {str(e)}\n{traceback.format_exc()}")
@@ -287,7 +320,7 @@ def increment_execution(user_id, file_name):
             st.error(f"Error updating execution count for {file_name}. Contact support.")
 
 # Apply patch (admin function)
-def apply_patch(user_id, new_count, days_valid):
+def apply_patch(user_id, new_count, days_valid, subscription_days_valid):
     if db is None:
         logging.error("Firestore client not initialized. Cannot generate patch.")
         st.error("Firestore unavailable. Cannot generate patch.")
@@ -296,16 +329,19 @@ def apply_patch(user_id, new_count, days_valid):
         patch_id = str(uuid.uuid4())
         doc_ref = db.collection(Config.LICENSE_COLLECTION).document(patch_id)
         expiry = datetime.now(timezone.utc) + timedelta(days=days_valid)
-        # Cap new_count to MAX_EXECUTIONS
-        capped_count = min(new_count, Config.MAX_EXECUTIONS)
+        subscription_expiry = datetime.now(timezone.utc) + timedelta(days=subscription_days_valid)
+        infinite_count = new_count == 0
         doc_ref.set({
             "user_id": user_id,
-            "new_count": capped_count,
+            "new_count": new_count,
+            "infinite_count": infinite_count,
+            "max_executions": new_count,
             "expiry": expiry,
+            "subscription_expiry": subscription_expiry,
             "used": False
         })
-        st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, {capped_count} executions)")
-        logging.info(f"Patch generated: {patch_id} for user {user_id}, capped_count={capped_count}")
+        st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, Subscription valid for {subscription_days_valid} days, {new_count if new_count > 0 else 'Unlimited'} executions)")
+        logging.info(f"Patch generated: {patch_id} for user {user_id}, count={new_count}, infinite={infinite_count}, subscription_expiry={subscription_expiry}")
         return patch_id
     except Exception as e:
         logging.error(f"Error generating patch for user {user_id}: {str(e)}\n{traceback.format_exc()}")
@@ -337,21 +373,25 @@ def validate_patch(patch_id, user_id):
         if data["user_id"] != user_id:
             st.error("Patch not valid for this user.")
             return False
-        # Cap new_count to MAX_EXECUTIONS
-        capped_count = min(data["new_count"], Config.MAX_EXECUTIONS)
         execution_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
         execution_ref.update({
-            "count": capped_count,
-            "expiry": expiry,
+            "count": data["new_count"],
+            "max_executions": data["max_executions"],
+            "infinite_count": data["infinite_count"],
+            "expiry": data["expiry"],
+            "subscription_expiry": data["subscription_expiry"],
             "last_updated": datetime.now(timezone.utc)
         })
         doc_ref.update({"used": True})
-        State.execution_count = capped_count
-        State.license_expiry = expiry
-        st.session_state.local_execution_count = capped_count if hasattr(st.session_state, 'local_execution_count') else None
-        st.session_state.patch_applied = True  # Flag to indicate patch was applied
+        State.execution_count = data["new_count"]
+        State.max_executions = data["max_executions"]
+        State.infinite_count = data["infinite_count"]
+        State.license_expiry = data["expiry"]
+        State.subscription_expiry = data["subscription_expiry"]
+        st.session_state.local_execution_count = data["new_count"] if hasattr(st.session_state, 'local_execution_count') else None
+        st.session_state.patch_applied = True
         st.success("Patch applied successfully.")
-        logging.info(f"Patch applied: {patch_id} for user {user_id}, capped_count={capped_count}")
+        logging.info(f"Patch applied: {patch_id} for user {user_id}, count={data['new_count']}, infinite={data['infinite_count']}, subscription_expiry={data['subscription_expiry']}")
         return True
     except Exception as e:
         logging.error(f"Error validating patch {patch_id} for user {user_id}: {str(e)}\n{traceback.format_exc()}")
@@ -369,15 +409,23 @@ def overlay_logo_on_image(image, logo_path, position="center"):
         logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
         logo = Image.fromarray(logo_array)
         offset = int(min(img_width, img_height) * Config.LOGO_OFFSET_PERCENT)
-        if position == "top":
-            x = (img_width - logo.size[0]) // 2
-            y = offset
-        elif position == "bottom":
-            x = (img_width - logo.size[0]) // 2
-            y = img_height - logo.size[1] - offset
-        else:
-            x = (img_width - logo.size[0]) // 2
-            y = (img_height - logo.size[1]) // 2
+        
+        position_map = {
+            "top": ((img_width - logo.size[0]) // 2, offset),
+            "bottom": ((img_width - logo.size[0]) // 2, img_height - logo.size[1] - offset),
+            "left": (offset, (img_height - logo.size[1]) // 2),
+            "right": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
+            "top_left": (offset, offset),
+            "top_right": (img_width - logo.size[0] - offset, offset),
+            "left_center": (offset, (img_height - logo.size[1]) // 2),
+            "right_center": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
+            "left_bottom": (offset, img_height - logo.size[1] - offset),
+            "right_bottom": (img_width - logo.size[0] - offset, img_height - logo.size[1] - offset),
+            "center": ((img_width - logo.size[0]) // 2, (img_height - logo.size[1]) // 2)
+        }
+        
+        x, y = position_map.get(position, position_map["center"])
+        
         output = Image.new("RGBA", image.size)
         output.paste(image, (0, 0))
         output.paste(logo, (x, y), logo)
@@ -401,15 +449,23 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         logo.save(temp_logo_path, "PNG")
         logo_clip = ImageClip(temp_logo_path).set_duration(video.duration)
         offset = int(min(vid_width, vid_height) * Config.LOGO_OFFSET_PERCENT)
-        if position == "top":
-            x = (vid_width - logo.size[0]) // 2
-            y = offset
-        elif position == "bottom":
-            x = (vid_width - logo.size[0]) // 2
-            y = vid_height - logo.size[1] - offset
-        else:
-            x = (vid_width - logo.size[0]) // 2
-            y = (vid_height - logo.size[1]) // 2
+        
+        position_map = {
+            "top": ((vid_width - logo.size[0]) // 2, offset),
+            "bottom": ((vid_width - logo.size[0]) // 2, vid_height - logo.size[1] - offset),
+            "left": (offset, (vid_height - logo.size[1]) // 2),
+            "right": (vid_width - logo.size[0] - offset, (vid_height - logo.size[1]) // 2),
+            "top_left": (offset, offset),
+            "top_right": (vid_width - logo.size[0] - offset, offset),
+            "left_center": (offset, (vid_height - logo.size[1]) // 2),
+            "right_center": (vid_width - logo.size[0] - offset, (vid_height - logo.size[1]) // 2),
+            "left_bottom": (offset, vid_height - logo.size[1] - offset),
+            "right_bottom": (vid_width - logo.size[0] - offset, vid_height - logo.size[1] - offset),
+            "center": ((vid_width - logo.size[0]) // 2, (vid_height - logo.size[1]) // 2)
+        }
+        
+        x, y = position_map.get(position, position_map["center"])
+        
         logo_clip = logo_clip.set_position((x, y))
         final_clip = CompositeVideoClip([video, logo_clip])
         final_clip.write_videofile(
@@ -506,7 +562,7 @@ def debug_license_limits(admin_user_id):
         st.error("No user_id for debug license limits.")
         return
     st.subheader("Debug License Limits")
-    st.write(f"Firestore Status: {'Connected' if db is not None else 'Disconnected'}")
+    st.write(f"Firestore Status: {' PREMIUM Connected' if db is not None else 'Disconnected'}")
     target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
     if target_user_id and db is not None:
         try:
@@ -515,25 +571,35 @@ def debug_license_limits(admin_user_id):
             if doc.exists:
                 data = doc.to_dict()
                 current_count = data.get("count", 0)
+                current_max = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
+                current_infinite = data.get("infinite_count", False)
                 current_expiry = data.get("expiry", datetime.now(timezone.utc))
+                current_sub_expiry = data.get("subscription_expiry", datetime.now(timezone.utc))
                 if current_expiry.tzinfo is None:
                     current_expiry = current_expiry.replace(tzinfo=timezone.utc)
+                if current_sub_expiry.tzinfo is None:
+                    current_sub_expiry = current_sub_expiry.replace(tzinfo=timezone.utc)
                 st.write(f"Current Count: {current_count}")
-                st.write(f"Current Expiry: {current_expiry}")
+                st.write(f"Current Max Executions: {current_max}")
+                st.write(f"Infinite Count Enabled: {current_infinite}")
+                st.write(f"Current License Expiry: {current_expiry}")
+                st.write(f"Current Subscription Expiry: {current_sub_expiry}")
             else:
                 st.warning(f"No license found for user {target_user_id}.")
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 if st.button("Set Count to 27", key="set_count_27"):
-                    doc_ref.update({"count": Config.MAX_EXECUTIONS})
-                    State.execution_count = Config.MAX_EXECUTIONS if target_user_id == admin_user_id else State.execution_count
+                    doc_ref.update({"count": Config.DEFAULT_MAX_EXECUTIONS})
+                    State.execution_count = Config.DEFAULT_MAX_EXECUTIONS if target_user_id == admin_user_id else State.execution_count
                     st.success("Execution count set to 27. Reload to test limit.")
-                    logging.info(f"Debug: Set execution count to {Config.MAX_EXECUTIONS} for user {target_user_id}")
+                    logging.info(f"Debug: Set execution count to {Config.DEFAULT_MAX_EXECUTIONS} for user {target_user_id}")
             with col2:
                 if st.button("Set Expiry to Past", key="set_expiry_past"):
                     past_expiry = datetime.now(timezone.utc) - timedelta(days=1)
-                    doc_ref.update({"expiry": past_expiry})
-                    State.license_expiry = past_expiry if target_user_id == admin_user_id else State.license_expiry
+                    doc_ref.update({"expiry": past_expiry, "subscription_expiry": past_expiry})
+                    if target_user_id == admin_user_id:
+                        State.license_expiry = past_expiry
+                        State.subscription_expiry = past_expiry
                     st.success("Expiry set to yesterday. Reload to test expiry.")
                     logging.info(f"Debug: Set expiry to {past_expiry} for user {target_user_id}")
             with col3:
@@ -547,7 +613,10 @@ def debug_license_limits(admin_user_id):
                     doc_ref.delete()
                     if target_user_id == admin_user_id:
                         State.execution_count = 0
+                        State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+                        State.infinite_count = False
                         State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+                        State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
                     st.success("License deleted. Reload to recreate.")
                     logging.info(f"Debug: Deleted license for user {target_user_id}")
         except Exception as e:
@@ -584,6 +653,9 @@ def main():
         }
         div.stButton > button[id^="download_all_btn"]:hover {
             background-color: #45a049;
+        }
+        div.stButton > button {
+            margin: 5px;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -719,15 +791,26 @@ def main():
 
     # Logo position selection
     st.subheader("Logo Position")
-    col1, col2, col3 = st.columns(3)
-    positions = ["top", "center", "bottom"]
-    for col, pos in zip([col1, col2, col3], positions):
+    col1, col2, col3, col4, col5 = st.columns(5)
+    positions = ["top", "center", "bottom", "left", "right"]
+    for col, pos in zip([col1, col2, col3, col4, col5], positions):
         with col:
             button_style = "background-color: #4CAF50; color: white; padding: 10px; border-radius: 5px; border: none; cursor: pointer;"
             if st.session_state.logo_position == pos:
                 button_style = "background-color: #45a049; color: white; padding: 10px; border-radius: 5px; border: 2px solid #000;"
             if st.button(pos.capitalize(), key=f"pos_{pos}", help=f"Place logo at {pos}"):
                 st.session_state.logo_position = pos
+
+    # Advanced position dropdown
+    advanced_position = st.selectbox(
+        "Advanced Logo Position",
+        ["Select Advanced Position", "top_left", "top_right", "left_center", "right_center", "left_bottom", "right_bottom"],
+        index=0,
+        key="advanced_position"
+    )
+    if advanced_position != "Select Advanced Position":
+        st.session_state.logo_position = advanced_position
+
     st.write(f"Selected Logo Position: **{st.session_state.logo_position.capitalize()}**")
 
     # Display existing logoed files
@@ -852,17 +935,21 @@ def main():
         st.write(f"download_all_trigger: {st.session_state.download_all_trigger}")
         st.write(f"patch_applied: {st.session_state.patch_applied}")
         st.write(f"State.execution_count: {State.execution_count}")
+        st.write(f"State.max_executions: {State.max_executions}")
+        st.write(f"State.infinite_count: {State.infinite_count}")
         st.write(f"State.license_expiry: {State.license_expiry}")
+        st.write(f"State.subscription_expiry: {State.subscription_expiry}")
         logging.info(f"Debug output displayed for admin: user={st.session_state.user}")
 
     # Admin panel
     if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
         st.subheader("Admin: Generate Patch")
         target_user = st.text_input("Target User ID")
-        new_count = st.number_input("New Execution Count", min_value=0, max_value=Config.MAX_EXECUTIONS, value=0)
-        days_valid = st.number_input("Days Valid", min_value=1, value=30)
+        new_count = st.number_input("New Execution Count (0 for unlimited)", min_value=0, value=0)
+        days_valid = st.number_input("License Days Valid", min_value=1, value=30)
+        subscription_days_valid = st.number_input("Subscription Days Valid", min_value=1, value=30)
         if st.button("Generate Patch"):
-            patch_id = apply_patch(target_user, new_count, days_valid)
+            patch_id = apply_patch(target_user, new_count, days_valid, subscription_days_valid)
 
 if __name__ == "__main__":
     main()
