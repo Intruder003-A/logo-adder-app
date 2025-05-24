@@ -78,6 +78,7 @@ class Config:
     ADMIN_USER_ID = "CO9n9TnhWoclEtyuH8jfzsXs7tt2"
     DNN_PROTO_PATH = os.path.join(BASE_DIR, "models", "deploy.prototxt")
     DNN_MODEL_PATH = os.path.join(BASE_DIR, "models", "res10_300x300_ssd_iter_140000.caffemodel")
+    PREVIEW_SIZE = (600, 400)  # Size for manual positioning preview
 
 # State management
 class State:
@@ -85,7 +86,7 @@ class State:
     max_executions = Config.DEFAULT_MAX_EXECUTIONS
     license_expiry = None
     subscription_expiry = None
-    blur_enabled = True  # Default to True
+    blur_enabled = True
     face_detector = None
     face_mesh = None
     yolo_model = None
@@ -170,7 +171,7 @@ def is_face_near_body(face_box, body_boxes, margin=0.2):
         bw, bh = bx2 - bx1, by2 - by1
         bx1_m, by1_m = bx1 - bw * margin, by1 - bh * margin
         bx2_m, by2_m = bx2 + bw * margin, by2 + bh * margin
-        if (bx1_m <= face_center[0] <= bx2_m and by1_m <= face_center[1] <= by2_m):
+        if (bx1_m <= face_center[0] <= bx2_m and by1_m <= face_center[1] <= bx2_m):
             return True
     return False
 
@@ -371,7 +372,7 @@ def process_video(video_path, output_path, face_detector, face_mesh, yolo_model,
             original_clip.close()
             logging.error(f"Failed to initialize video writer: {temp_output_path}")
             return []
-        
+
         blurred_regions = []
         frame_idx = 0
         while cap.isOpened():
@@ -384,7 +385,7 @@ def process_video(video_path, output_path, face_detector, face_mesh, yolo_model,
                 region["frame_idx"] = frame_idx
             blurred_regions.extend(regions)
             frame_idx += 1
-        
+
         cap.release()
         out.release()
         cv2.destroyAllWindows()
@@ -460,7 +461,7 @@ def review_blurred_regions(blurred_regions, media_type, base_path, media_name):
     return approved
 
 # Overlay logo on image
-def overlay_logo_on_image(image, logo_path, position="center"):
+def overlay_logo_on_image(image, logo_path, position="center", custom_position=None):
     try:
         if image.mode != 'RGBA':
             image = image.convert('RGBA')
@@ -473,20 +474,23 @@ def overlay_logo_on_image(image, logo_path, position="center"):
         logo_array[:, :, 3] = (logo_array[:, :, 3] * Config.LOGO_TRANSPARENCY).astype(np.uint8)
         logo = Image.fromarray(logo_array)
         offset = int(min(img_width, img_height) * Config.LOGO_OFFSET_PERCENT)
-        position_map = {
-            "top": ((img_width - logo.size[0]) // 2, offset),
-            "bottom": ((img_width - logo.size[0]) // 2, img_height - logo.size[1] - offset),
-            "left": (offset, (img_height - logo.size[1]) // 2),
-            "right": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
-            "top_left": (offset, offset),
-            "top_right": (img_width - logo.size[0] - offset, offset),
-            "left_center": (offset, (img_height - logo.size[1]) // 2),
-            "right_center": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
-            "left_bottom": (offset, img_height - logo.size[1] - offset),
-            "right_bottom": (img_width - logo.size[0] - offset, img_height - logo.size[1] - offset),
-            "center": ((img_width - logo.size[0]) // 2, (img_height - logo.size[1]) // 2)
-        }
-        x, y = position_map.get(position, position_map["center"])
+        if custom_position:
+            x, y = custom_position
+        else:
+            position_map = {
+                "top": ((img_width - logo.size[0]) // 2, offset),
+                "bottom": ((img_width - logo.size[0]) // 2, img_height - logo.size[1] - offset),
+                "left": (offset, (img_height - logo.size[1]) // 2),
+                "right": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
+                "top_left": (offset, offset),
+                "top_right": (img_width - logo.size[0] - offset, offset),
+                "left_center": (offset, (img_height - logo.size[1]) // 2),
+                "right_center": (img_width - logo.size[0] - offset, (img_height - logo.size[1]) // 2),
+                "left_bottom": (offset, img_height - logo.size[1] - offset),
+                "right_bottom": (img_width - logo.size[0] - offset, img_height - logo.size[1] - offset),
+                "center": ((img_width - logo.size[0]) // 2, (img_height - logo.size[1]) // 2)
+            }
+            x, y = position_map.get(position, position_map["center"])
         x, y = max(0, x), max(0, y)
         if x + logo.size[0] > img_width or y + logo.size[1] > img_height:
             logging.warning(f"Logo position ({x}, {y}) adjusted to fit image")
@@ -502,7 +506,7 @@ def overlay_logo_on_image(image, logo_path, position="center"):
         return image
 
 # Overlay logo on video
-def overlay_logo_on_video(video_path, logo_path, output_path, position="center"):
+def overlay_logo_on_video(video_path, logo_path, output_path, position="center", custom_position=None):
     try:
         video = VideoFileClip(video_path)
         logo = Image.open(logo_path).convert("RGBA")
@@ -516,20 +520,23 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         logo.save(temp_logo_path, "PNG")
         logo_clip = ImageClip(temp_logo_path).set_duration(video.duration)
         offset = int(min(vid_width, vid_height) * Config.LOGO_OFFSET_PERCENT)
-        position_map = {
-            "top": ((vid_width - logo.size[0]) // 2, offset),
-            "bottom": ((vid_width - logo.size[0]) // 2, vid_height - logo.size[1] - offset),
-            "left": (offset, (vid_height - logo.size[1]) // 2),
-            "right": (vid_width - logo.size[0] - offset, (vid_height - logo.size[1]) // 2),
-            "top_left": (offset, offset),
-            "top_right": (vid_width - logo.size[0] - offset, offset),
-            "left_center": (offset, (vid_height - logo.size[1]) // 2),
-            "right_center": (vid_width - logo.size[0] - offset, (vid_height - logo.size[1]) // 2),
-            "left_bottom": (offset, vid_height - logo.size[1] - offset),
-            "right_bottom": (vid_width - logo.size[0] - offset, vid_height - logo.size[1] - offset),
-            "center": ((vid_width - logo.size[0]) // 2, (vid_height - logo.size[1]) // 2)
-        }
-        x, y = position_map.get(position, position_map["center"])
+        if custom_position:
+            x, y = custom_position
+        else:
+            position_map = {
+                "top": ((vid_width - logo.size[0]) // 2, offset),
+                "bottom": ((vid_width - logo.size[0]) // 2, vid_height - logo.size[1] - offset),
+                "left": (offset, (vid_height - logo.size[1]) // 2),
+                "right": (vid_width - logo.size[0] - offset, (vid_height - logo.size[1]) // 2),
+                "top_left": (offset, offset),
+                "top_right": (vid_width - logo.size[0] - offset, offset),
+                "left_center": (offset, (vid_height - logo.size[1]) // 2),
+                "right_center": (vid_width - logo.size[0] - offset, (vid_height - logo.size[1]) // 2),
+                "left_bottom": (offset, vid_height - logo.size[1] - offset),
+                "right_bottom": (vid_width - logo.size[0] - offset, vid_height - logo.size[1] - offset),
+                "center": ((vid_width - logo.size[0]) // 2, (vid_height - logo.size[1]) // 2)
+            }
+            x, y = position_map.get(position, position_map["center"])
         logo_clip = logo_clip.set_position((x, y))
         final_clip = CompositeVideoClip([video, logo_clip])
         final_clip.write_videofile(
@@ -548,6 +555,34 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
     except Exception as e:
         logging.error(f"Error processing video: {str(e)}")
         raise
+
+# Generate preview image for manual positioning
+def generate_preview_image(media_file, logo_path, position="center", custom_position=None):
+    try:
+        media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
+        if media_type == "image":
+            image = Image.open(media_file).convert("RGBA")
+            if st.session_state.blur_enabled and State.blur_enabled:
+                image, _ = process_image(image, State.dnn_net, st.session_state.blur_enabled)
+            preview = overlay_logo_on_image(image, logo_path, position, custom_position)
+        else:
+            video = VideoFileClip(media_file)
+            frame = video.get_frame(0)
+            video.close()
+            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+            if st.session_state.blur_enabled and State.blur_enabled:
+                frame, _ = process_frame(frame, State.face_detector, State.face_mesh, State.yolo_model, State.tracker, st.session_state.blur_enabled)
+                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+            preview = overlay_logo_on_image(image, logo_path, position, custom_position)
+        
+        # Resize for preview
+        preview.thumbnail(Config.PREVIEW_SIZE, Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        preview.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as e:
+        logging.error(f"Error generating preview: {str(e)}")
+        return None
 
 # Check license and execution count
 def check_license(user_id, force_refresh=False):
@@ -612,7 +647,7 @@ def check_license(user_id, force_refresh=False):
                 "created_at": datetime.now(timezone.utc)
             })
             logging.info(f"New license created for user {user_id}: count=0, max={State.max_executions}, infinite={State.infinite_count}, blur_enabled={State.blur_enabled}, expiry={State.license_expiry}, subscription_expiry={State.subscription_expiry}")
-        
+
         try:
             expiry = State.license_expiry
             if expiry.tzinfo is None:
@@ -620,14 +655,14 @@ def check_license(user_id, force_refresh=False):
             if datetime.now(timezone.utc) > expiry:
                 st.error("License expired. Contact the service team for a new patch.")
                 return False
-            
+
             sub_expiry = State.subscription_expiry
             if sub_expiry.tzinfo is None:
                 sub_expiry = sub_expiry.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) > sub_expiry:
                 st.error("Subscription expired. Contact the service team for a new patch.")
                 return False
-                
+
             if State.infinite_count and (State.max_executions == 0 and State.execution_count == 0):
                 logging.info(f"User {user_id} has valid infinite count license.")
                 return True
@@ -1033,6 +1068,10 @@ def main():
         div.stButton > button {
             margin: 5px;
         }
+        #logo-canvas {
+            border: 2px solid #ccc;
+            cursor: crosshair;
+        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -1052,6 +1091,9 @@ def main():
         st.session_state.device_id = str(uuid.uuid4())
         st.session_state.patch_applied = False
         st.session_state.blur_reviewed = {}
+        st.session_state.manual_positioning = False
+        st.session_state.custom_logo_position = None
+        st.session_state.preview_image = None
         logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
 
     logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}")
@@ -1152,7 +1194,6 @@ def main():
     media_files = st.file_uploader("Upload Media (Images/Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True, key="media")
     if State.blur_enabled:
         st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=st.session_state.blur_enabled)
-    
 
     if media_files:
         new_files = [f for f in media_files if f.name not in [mf.name for mf in st.session_state.media_files]]
@@ -1173,6 +1214,7 @@ def main():
                 button_style = "background-color: #45a049; color: white; padding: 10px; border-radius: 5px; border: 2px solid #000;"
             if st.button(pos.capitalize(), key=f"pos_{pos}", help=f"Place logo at {pos}"):
                 st.session_state.logo_position = pos
+                st.session_state.custom_logo_position = None  # Reset custom position
 
     advanced_position = st.selectbox(
         "Advanced Logo Position",
@@ -1182,8 +1224,82 @@ def main():
     )
     if advanced_position != "Select Advanced Position":
         st.session_state.logo_position = advanced_position
+        st.session_state.custom_logo_position = None  # Reset custom position
 
-    st.write(f"Selected Logo Position: **{st.session_state.logo_position.capitalize()}**")
+    st.session_state.manual_positioning = st.checkbox("Enable Manual Logo Positioning", value=st.session_state.manual_positioning)
+    if st.session_state.manual_positioning and st.session_state.logo_file and st.session_state.media_files:
+        st.subheader("Manual Logo Positioning")
+        logo_path = os.path.join(base_path, "Logos", st.session_state.logo_file.name)
+        media_file = st.session_state.media_files[0]  # Use first media file for preview
+        preview_data = generate_preview_image(media_file, logo_path, st.session_state.logo_position, st.session_state.custom_logo_position)
+        if preview_data:
+            st.session_state.preview_image = preview_data
+            preview_b64 = base64.b64encode(preview_data).decode('utf-8')
+            js_code = f"""
+            <style>
+                #logo-canvas {{
+                    border: 2px solid #ccc;
+                    cursor: crosshair;
+                }}
+            </style>
+            <script>
+                function setupCanvas() {{
+                    const canvas = document.getElementById('logo-canvas');
+                    const ctx = canvas.getContext('2d');
+                    const img = new Image();
+                    img.src = 'data:image/png;base64,{preview_b64}';
+                    img.onload = () => {{
+                        canvas.width = {Config.PREVIEW_SIZE[0]};
+                        canvas.height = {Config.PREVIEW_SIZE[1]};
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    }};
+                    canvas.addEventListener('click', (e) => {{
+                        const rect = canvas.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        document.getElementById('logo-position').value = `${{x}},${{y}}`;
+                        const event = new Event('change');
+                        document.getElementById('logo-position').dispatchEvent(event);
+                    }});
+                }}
+                window.onload = setupCanvas;
+            </script>
+            <canvas id="logo-canvas" width="{Config.PREVIEW_SIZE[0]}" height="{Config.PREVIEW_SIZE[1]}"></canvas>
+            <input type="hidden" id="logo-position" onchange="this.form.submit()">
+            """
+            st.markdown(js_code, unsafe_allow_html=True)
+            position_input = st.text_input("Logo Position (x, y)", value="", key="logo_position_input", disabled=True)
+            if position_input:
+                try:
+                    x, y = map(int, position_input.split(','))
+                    # Scale coordinates to original image size
+                    media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
+                    if media_type == "image":
+                        img = Image.open(media_file)
+                        orig_width, orig_height = img.size
+                    else:
+                        video = VideoFileClip(media_file)
+                        orig_width, orig_height = video.size
+                        video.close()
+                    scale_x = orig_width / Config.PREVIEW_SIZE[0]
+                    scale_y = orig_height / Config.PREVIEW_SIZE[1]
+                    scaled_x = int(x * scale_x)
+                    scaled_y = int(y * scale_y)
+                    st.session_state.custom_logo_position = (scaled_x, scaled_y)
+                    # Update preview with new position
+                    preview_data = generate_preview_image(media_file, logo_path, custom_position=st.session_state.custom_logo_position)
+                    if preview_data:
+                        st.session_state.preview_image = preview_data
+                except ValueError:
+                    st.error("Invalid position format. Use 'x,y' (e.g., '100,200').")
+            if st.button("Save Logo Position"):
+                if st.session_state.custom_logo_position:
+                    st.success(f"Logo position saved at ({st.session_state.custom_logo_position[0]}, {st.session_state.custom_logo_position[1]})")
+                else:
+                    st.warning("Please click on the image to set a logo position.")
+                    st.session_state.custom_logo_position = None
+
+    st.write(f"Selected Logo Position: **{st.session_state.logo_position.capitalize() if not st.session_state.manual_positioning or not st.session_state.custom_logo_position else 'Manual'}**")
 
     if st.session_state.processed_files_data:
         st.subheader("Download Logoed Files")
@@ -1259,96 +1375,73 @@ def main():
                             )
                             st.image(blurred_image, caption="Blur Preview (Before Logo)", use_container_width=True)
                             if not blurred_regions:
-                                st.warning("No faces detected for blurring. The image will be processed with the logo only.")
-                        else:
-                            blurred_image = image
-                        if st.session_state.blur_enabled and State.blur_enabled:
-                            if media_file.name not in st.session_state.blur_reviewed:
-                                approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
-                                st.session_state.blur_reviewed[media_file.name] = approved
+                                st.warning(f"No faces detected in {media_file.name}. Proceeding with logo overlay.")
+                                approved = True
+                            else:
+                                if media_file.name not in st.session_state.blur_reviewed:
+                                    approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
+                                    st.session_state.blur_reviewed[media_file.name] = approved
+                                else:
+                                    approved = st.session_state.blur_reviewed[media_file.name]
                                 if not approved:
-                                    st.error(f"Blur review not approved for {media_file.name}. Please adjust and reprocess.")
+                                    st.error(f"Blur review not approved for {media_file.name}. Skipping processing.")
                                     continue
-                        output_image = overlay_logo_on_image(blurred_image, logo_path, st.session_state.logo_position)
-                        output_image.save(output_path, "PNG")
-                        with open(output_path, "rb") as f:
-                            file_data = f.read()
-                        processed_files.append((output_path, media_file.name, file_data))
-                    else:
-                        intermediate_path = os.path.join(base_path, "Media", f"blurred_{media_file.name}")
-                        blurred_regions = process_video(
-                            media_path,
-                            intermediate_path,
-                            State.face_detector,
-                            State.face_mesh,
-                            State.yolo_model,
-                            State.tracker,
-                            st.session_state.blur_enabled and State.blur_enabled
+                            image = blurred_image
+                        final_image = overlay_logo_on_image(
+                            image,
+                            logo_path,
+                            position=st.session_state.logo_position,
+                            custom_position=st.session_state.custom_logo_position if st.session_state.manual_positioning else None
                         )
+                        final_image.save(output_path, "PNG")
+                        logging.info(f"Image processed: {output_path}")
+                    else:
                         if st.session_state.blur_enabled and State.blur_enabled:
-                            if media_file.name not in st.session_state.blur_reviewed:
-                                approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
-                                st.session_state.blur_reviewed[media_file.name] = approved
+                            blurred_regions = process_video(
+                                media_path,
+                                output_path,
+                                State.face_detector,
+                                State.face_mesh,
+                                State.yolo_model,
+                                State.tracker,
+                                st.session_state.blur_enabled
+                            )
+                            if not blurred_regions:
+                                st.warning(f"No faces detected in {media_file.name}. Proceeding with logo overlay.")
+                                approved = True
+                            else:
+                                if media_file.name not in st.session_state.blur_reviewed:
+                                    approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
+                                    st.session_state.blur_reviewed[media_file.name] = approved
+                                else:
+                                    approved = st.session_state.blur_reviewed[media_file.name]
                                 if not approved:
-                                    st.error(f"Blur review not approved for {media_file.name}. Please adjust and reprocess.")
+                                    st.error(f"Blur review not approved for {media_file.name}. Skipping processing.")
                                     continue
-                        overlay_logo_on_video(intermediate_path if os.path.exists(intermediate_path) else media_path, logo_path, output_path, st.session_state.logo_position)
-                        with open(output_path, "rb") as f:
-                            file_data = f.read()
-                        processed_files.append((output_path, media_file.name, file_data))
-                        if os.path.exists(intermediate_path):
-                            os.remove(intermediate_path)
+                        if not (st.session_state.blur_enabled and State.blur_enabled and blurred_regions):
+                            shutil.copy(media_path, output_path)
+                        overlay_logo_on_video(
+                            output_path,
+                            logo_path,
+                            output_path,
+                            position=st.session_state.logo_position,
+                            custom_position=st.session_state.custom_logo_position if st.session_state.manual_positioning else None
+                        )
+                        logging.info(f"Video processed: {output_path}")
+                    with open(output_path, "rb") as f:
+                        file_data = f.read()
+                    processed_files.append((output_path, media_file.name, file_data))
+                    st.session_state.logoed_files.append(output_path)
                 except Exception as e:
-                    st.error(f"Error processing {media_file.name}: {e}")
                     logging.error(f"Error processing {media_file.name}: {str(e)}")
-            st.session_state.logoed_files = [(file_path, original_name) for file_path, original_name, _ in processed_files]
+                    st.error(f"Error processing {media_file.name}: {str(e)}")
+                    continue
             st.session_state.processed_files_data = processed_files
-            st.subheader("Download Logoed Files")
-            for file_path, original_name, file_data in st.session_state.processed_files_data:
-                st.download_button(
-                    label=f"Download {os.path.basename(file_path)}",
-                    data=file_data,
-                    file_name=os.path.basename(file_path),
-                    key=f"download_{uuid.uuid4()}",
-                    help=f"Download logoed file: {original_name}"
-                )
-            if len(st.session_state.processed_files_data) > 1:
-                st.warning("Please allow multiple downloads in your browser if prompted.")
-                if Config.USE_JAVASCRIPT_DOWNLOAD:
-                    trigger_multiple_downloads(st.session_state.processed_files_data)
-                else:
-                    st.button("Download All Files", key=f"download_all_btn_{uuid.uuid4()}", help="Download all logoed files")
-
-    if st.session_state.user_id == Config.ADMIN_USER_ID:
-            st.subheader("Debug Session State")
-            st.write(f"user: {st.session_state.user}")
-            st.write(f"user_id: {st.session_state.user_id}")
-            st.write(f"device_id: {st.session_state.device_id}")
-            st.write(f"auth_error: {st.session_state.auth_error}")
-            st.write(f"logo_file: {st.session_state.logo_file}")
-            st.write(f"media_files: {len(st.session_state.media_files)} files")
-            st.write(f"processed_files_data: {len(st.session_state.processed_files_data)} files")
-            st.write(f"download_all_index: {st.session_state.download_all_index}")
-            st.write(f"download_all_trigger: {st.session_state.download_all_trigger}")
-            st.write(f"patch_applied: {st.session_state.patch_applied}")
-            st.write(f"State.execution_count: {State.execution_count}")
-            st.write(f"State.max_executions: {State.max_executions}")
-            st.write(f"State.infinite_count: {State.infinite_count}")
-            st.write(f"State.blur_enabled: {State.blur_enabled}")
-            st.write(f"State.license_expiry: {State.license_expiry}")
-            st.write(f"State.subscription_expiry: {State.subscription_expiry}")
-            
-# Admin panel
-    if st.session_state.user_id == Config.ADMIN_USER_ID:
-        st.subheader("Admin: Generate Patch")
-        target_user = st.text_input("Target User ID")
-        new_count = st.number_input("Start Execution Count", min_value=0, value=0)
-        max_executions = st.number_input("Max Executions (0 for infinite)", min_value=0, value=Config.DEFAULT_MAX_EXECUTIONS)
-        days_valid = st.number_input("License Days Valid", min_value=1, value=30)
-        subscription_days_valid = st.number_input("Subscription Days Valid", min_value=1, value=30)
-        blur_enabled = st.checkbox("Enable Face Blurring for User", value=True)
-        if st.button("Generate Patch"):
-            patch_id = apply_patch(target_user, new_count, days_valid, subscription_days_valid, max_executions, blur_enabled)
+            if st.session_state.logoed_files:
+                st.success(f"Processed {len(st.session_state.logoed_files)} files successfully.")
+            else:
+                st.warning("No files were processed successfully.")
+            st.rerun()
 
 if __name__ == "__main__":
     main()
