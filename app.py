@@ -347,10 +347,11 @@ def apply_patch(user_id, new_count, days_valid, subscription_days_valid):
             "user_id": user_id,
             "new_count": new_count,
             "infinite_count": infinite_count,
-            "max_executions": new_count,
+            "max_executions": new_count if not infinite_count else Config.DEFAULT_MAX_EXECUTIONS,
             "expiry": expiry,
             "subscription_expiry": subscription_expiry,
-            "used": False
+            "used": False,
+            "created_at": datetime.now(timezone.utc)
         })
         st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, Subscription valid for {subscription_days_valid} days, {new_count if new_count > 0 else 'Unlimited'} executions)")
         logging.info(f"Patch generated: {patch_id} for user {user_id}, count={new_count}, infinite={infinite_count}, subscription_expiry={subscription_expiry}")
@@ -371,47 +372,63 @@ def validate_patch(patch_id, user_id):
         st.error("Firestore unavailable. Cannot apply patch.")
         return False
     try:
+        # Fetch patch document
         doc_ref = db.collection(Config.LICENSE_COLLECTION).document(patch_id)
         doc = doc_ref.get()
         if not doc.exists:
+            logging.error(f"Patch {patch_id} not found for user {user_id}.")
             st.error("Invalid patch ID.")
             return False
         data = doc.to_dict()
         if data["used"]:
+            logging.error(f"Patch {patch_id} already used for user {user_id}.")
             st.error("Patch already used.")
             return False
         expiry = data["expiry"]
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
         if datetime.now(timezone.utc) > expiry:
+            logging.error(f"Patch {patch_id} expired for user {user_id}.")
             st.error("Patch expired.")
             return False
         if data["user_id"] != user_id:
+            logging.error(f"Patch {patch_id} not valid for user {user_id}.")
             st.error("Patch not valid for this user.")
             return False
+
+        # Update execution document
         execution_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
-        execution_ref.update({
+        new_data = {
             "count": data["new_count"],
             "max_executions": data["max_executions"],
             "infinite_count": data["infinite_count"],
             "expiry": data["expiry"],
             "subscription_expiry": data["subscription_expiry"],
             "last_updated": datetime.now(timezone.utc)
-        })
-        doc_ref.update({"used": True})
+        }
+        execution_ref.set(new_data, merge=True)
+        logging.info(f"Execution data updated for user {user_id}: {new_data}")
+
+        # Mark patch as used
+        doc_ref.update({"used": True, "used_at": datetime.now(timezone.utc)})
+        logging.info(f"Patch {patch_id} marked as used for user {user_id}.")
+
+        # Update state
         State.execution_count = data["new_count"]
         State.max_executions = data["max_executions"]
         State.infinite_count = data["infinite_count"]
         State.license_expiry = data["expiry"]
         State.subscription_expiry = data["subscription_expiry"]
-        st.session_state.local_execution_count = data["new_count"] if hasattr(st.session_state, 'local_execution_count') else None
+        if hasattr(st.session_state, 'local_execution_count'):
+            st.session_state.local_execution_count = data["new_count"]
+
         st.session_state.patch_applied = True
-        st.success("Patch applied successfully.")
-        logging.info(f"Patch applied: {patch_id} for user {user_id}, count={data['new_count']}, infinite={data['infinite_count']}, subscription_expiry={data['subscription_expiry']}")
+        st.success(f"Patch {patch_id} applied successfully. Execution count reset to {data['new_count']}.")
+        logging.info(f"Patch applied: {patch_id} for user {user_id}, count={data['new_count']}, max_executions={data['max_executions']}, infinite={data['infinite_count']}, expiry={data['expiry']}, subscription_expiry={data['subscription_expiry']}")
         return True
     except Exception as e:
         logging.error(f"Error validating patch {patch_id} for user {user_id}: {str(e)}\n{traceback.format_exc()}")
-        st.error("Error applying patch.")
+        st.error(f"Error applying patch: {str(e)}")
         return False
 
 # Overlay logo on image with position option
@@ -760,7 +777,9 @@ def main():
         patch_id = st.text_input("Enter Patch ID")
         if st.button("Apply Patch"):
             if validate_patch(patch_id, st.session_state.user_id):
-                st.rerun()
+                # Force re-check license after patch application
+                if check_license(st.session_state.user_id):
+                    st.rerun()
         return
     elif st.session_state.patch_applied:
         # Clear patch_applied flag after successful check
