@@ -199,7 +199,7 @@ def process_video(video_path, output_path, net, blur_enabled):
         shutil.copy(video_path, output_path)
 
 # Check license and execution count
-def check_license(user_id):
+def check_license(user_id, force_refresh=False):
     if user_id == Config.ADMIN_USER_ID:
         logging.info(f"Admin user {user_id} bypasses license and subscription checks.")
         State.execution_count = 0
@@ -222,7 +222,7 @@ def check_license(user_id):
         State.infinite_count = False
         State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
         State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
-        if not State.infinite_count and State.execution_count >= State.max_executions:
+        if State.execution_count >= State.max_executions:
             st.error("Execution limit reached. Contact the service team for a new patch.")
             return False
         if datetime.now(timezone.utc) > State.subscription_expiry:
@@ -274,8 +274,11 @@ def check_license(user_id):
                 st.error("Subscription expired. Contact the service team for a new patch.")
                 return False
                 
-            # Check execution count
-            if not State.infinite_count and State.execution_count >= State.max_executions:
+            # Check execution count (only allow infinite_count if max_executions=0 and count=0)
+            if State.infinite_count and (State.max_executions == 0 and State.execution_count == 0):
+                logging.info(f"User {user_id} has valid infinite count license.")
+                return True
+            if State.execution_count >= State.max_executions:
                 st.error("Execution limit reached. Contact the service team for a new patch.")
                 return False
             return True
@@ -287,6 +290,9 @@ def check_license(user_id):
             State.infinite_count = False
             State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
             State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+            if State.execution_count >= State.max_executions:
+                st.error("Execution limit reached. Contact the service team for a new patch.")
+                return False
             return True
     except Exception as e:
         if "PERMISSION_DENIED" in str(e).upper():
@@ -316,6 +322,15 @@ def increment_execution(user_id, file_name):
         return
     try:
         doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
+        doc = doc_ref.get()
+        if doc.exists:
+            data = doc.to_dict()
+            infinite_count = data.get("infinite_count", False)
+            max_executions = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
+            current_count = data.get("count", 0)
+            if infinite_count and max_executions == 0 and current_count == 0:
+                logging.info(f"User {user_id} has infinite count, skipping increment for file {file_name}.")
+                return
         doc_ref.update({
             "count": firestore.Increment(1),
             "last_updated": datetime.now(timezone.utc),
@@ -342,8 +357,8 @@ def apply_patch(user_id, new_count, days_valid, subscription_days_valid, max_exe
         doc_ref = db.collection(Config.LICENSE_COLLECTION).document(patch_id)
         expiry = datetime.now(timezone.utc) + timedelta(days=days_valid)
         subscription_expiry = datetime.now(timezone.utc) + timedelta(days=subscription_days_valid)
-        infinite_count = new_count == 0
-        effective_max_executions = max_executions if max_executions is not None else (new_count if infinite_count else new_count + Config.DEFAULT_MAX_EXECUTIONS)
+        infinite_count = new_count == 0 and max_executions == 0
+        effective_max_executions = max_executions if max_executions is not None else (Config.DEFAULT_MAX_EXECUTIONS if infinite_count else new_count + Config.DEFAULT_MAX_EXECUTIONS)
         doc_ref.set({
             "user_id": user_id,
             "new_count": new_count,
@@ -424,7 +439,7 @@ def validate_patch(patch_id, user_id):
             st.session_state.local_execution_count = data["new_count"]
 
         st.session_state.patch_applied = True
-        st.success(f"Patch {patch_id} applied successfully. Execution count reset to {data['new_count']}, max executions set to {data['max_executions']}.")
+        st.success(f"Patch {patch_id} applied successfully. Execution count set to {data['new_count']}, max executions set to {data['max_executions']}.")
         logging.info(f"Patch applied: {patch_id} for user {user_id}, count={data['new_count']}, max_executions={data['max_executions']}, infinite={data['infinite_count']}, expiry={data['expiry']}, subscription_expiry={data['subscription_expiry']}")
         return True
     except Exception as e:
@@ -622,12 +637,53 @@ def debug_license_limits(admin_user_id):
                 st.warning(f"No license found for user {target_user_id}.")
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                if st.button("Set Count to 27", key="set_count_27"):
-                    doc_ref.update({"count": Config.DEFAULT_MAX_EXECUTIONS})
-                    State.execution_count = Config.DEFAULT_MAX_EXECUTIONS if target_user_id == admin_user_id else State.execution_count
-                    st.success("Execution count set to 27. Reload to test limit.")
-                    logging.info(f"Debug: Set execution count to {Config.DEFAULT_MAX_EXECUTIONS} for user {target_user_id}")
+                custom_count = st.number_input("Set Custom Execution Count", min_value=0, value=current_count, key="custom_count")
+                if st.button("Apply Custom Count", key="apply_custom_count"):
+                    doc_ref.update({"count": custom_count})
+                    State.execution_count = custom_count if target_user_id == admin_user_id else State.execution_count
+                    st.success(f"Execution count set to {custom_count}. Reload to continue.")
+                    logging.info(f"Debug: Set execution count to {custom_count} for user {target_user_id}")
             with col2:
+                expiry_days = st.number_input("Set License Expiry Days", min_value=1, value=30, key="expiry_days")
+                if st.button("Apply Expiry Days", key="apply_expiry_days"):
+                    new_expiry = datetime.now(timezone.utc) + timedelta(days=expiry_days)
+                    doc_ref.update({"expiry": new_expiry})
+                    if target_user_id == admin_user_id:
+                        State.license_expiry = new_expiry
+                    st.success(f"License expiry set to {new_expiry}. Reload to continue.")
+                    logging.info(f"Debug: Set license expiry to {new_expiry} for user {target_user_id}")
+            with col3:
+                sub_expiry_days = st.number_input("Set Subscription Expiry Days", min_value=1, value=30, key="sub_expiry_days")
+                if st.button("Apply Subscription Days", key="apply_sub_expiry_days"):
+                    new_sub_expiry = datetime.now(timezone.utc) + timedelta(days=sub_expiry_days)
+                    doc_ref.update({"subscription_expiry": new_sub_expiry})
+                    if target_user_id == admin_user_id:
+                        State.subscription_expiry = new_sub_expiry
+                    st.success(f"Subscription expiry set to {new_sub_expiry}. Reload to continue.")
+                    logging.info(f"Debug: Set subscription expiry to {new_sub_expiry} for user {target_user_id}")
+            with col4:
+                infinite_count_toggle = st.checkbox("Enable Infinite Count", value=current_infinite, key="infinite_count_toggle")
+                if st.button("Apply Infinite Count", key="apply_infinite_count"):
+                    if infinite_count_toggle:
+                        doc_ref.update({"infinite_count": True, "count": 0, "max_executions": 0})
+                        if target_user_id == admin_user_id:
+                            State.infinite_count = True
+                            State.execution_count = 0
+                            State.max_executions = 0
+                        st.success("Infinite count enabled, count and max_executions set to 0.")
+                        logging.info(f"Debug: Enabled infinite count for user {target_user_id}")
+                    else:
+                        doc_ref.update({"infinite_count": False, "max_executions": Config.DEFAULT_MAX_EXECUTIONS})
+                        if target_user_id == admin_user_id:
+                            State.infinite_count = False
+                            State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+                        st.success(f"Infinite count disabled, max_executions set to {Config.DEFAULT_MAX_EXECUTIONS}.")
+                        logging.info(f"Debug: Disabled infinite count for user {target_user_id}")
+                if st.button("Reset Count to 0", key="reset_count"):
+                    doc_ref.update({"count": 0})
+                    State.execution_count = 0 if target_user_id == admin_user_id else State.execution_count
+                    st.success("Execution count reset to 0. Reload to continue.")
+                    logging.info(f"Debug: Reset execution count to 0 for user {target_user_id}")
                 if st.button("Set Expiry to Past", key="set_expiry_past"):
                     past_expiry = datetime.now(timezone.utc) - timedelta(days=1)
                     doc_ref.update({"expiry": past_expiry, "subscription_expiry": past_expiry})
@@ -636,13 +692,6 @@ def debug_license_limits(admin_user_id):
                         State.subscription_expiry = past_expiry
                     st.success("Expiry set to yesterday. Reload to test expiry.")
                     logging.info(f"Debug: Set expiry to {past_expiry} for user {target_user_id}")
-            with col3:
-                if st.button("Reset Count to 0", key="reset_count"):
-                    doc_ref.update({"count": 0})
-                    State.execution_count = 0 if target_user_id == admin_user_id else State.execution_count
-                    st.success("Execution count reset to 0. Reload to continue.")
-                    logging.info(f"Debug: Reset execution count to 0 for user {target_user_id}")
-            with col4:
                 if st.button("Delete License", key="delete_license"):
                     doc_ref.delete()
                     if target_user_id == admin_user_id:
@@ -712,7 +761,7 @@ def main():
         st.session_state.patch_applied = False
         logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
 
-    logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
+    logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}")
 
     # Authentication
     if not st.session_state.user:
@@ -770,21 +819,23 @@ def main():
         st.session_state.user_id = st.session_state.user
         logging.info(f"Synced user_id from user: {st.session_state.user_id}")
 
-    logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
+    logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}")
 
-    # Check license early (bypassed for admin)
-    if st.session_state.user_id != Config.ADMIN_USER_ID and not st.session_state.patch_applied and not check_license(st.session_state.user_id):
+    # Check license early (bypassed for admin or after patch)
+    license_valid = check_license(st.session_state.user_id, force_refresh=True)
+    if st.session_state.user_id != Config.ADMIN_USER_ID and not st.session_state.patch_applied and not license_valid:
         st.subheader("Apply Patch")
         patch_id = st.text_input("Enter Patch ID")
         if st.button("Apply Patch"):
             if validate_patch(patch_id, st.session_state.user_id):
                 st.session_state.patch_applied = True
-                logging.info(f"Patch {patch_id} applied, rerunning app for user {st.session_state.user_id}")
+                logging.info(f"Patch {patch_id} applied, forcing license refresh for user {st.session_state.user_id}")
+                check_license(st.session_state.user_id, force_refresh=True)  # Force refresh license data
                 st.rerun()
         return
 
     # Clear patch_applied flag after successful license check
-    if st.session_state.patch_applied and check_license(st.session_state.user_id):
+    if st.session_state.patch_applied and check_license(st.session_state.user_id, force_refresh=True):
         st.session_state.patch_applied = False
         logging.info(f"Patch applied and license check passed for user {st.session_state.user_id}, cleared patch_applied flag")
 
