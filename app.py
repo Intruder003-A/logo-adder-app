@@ -1315,7 +1315,7 @@ def main():
                             const scaledY = Math.round(y * scaleY);
                             const input = document.querySelector('[data-click-pos="{safe_media_key}"]');
                             if (input) {{
-                                input.value = `(${scaledX}, ${scaledY})`;
+                                input.value = `({{scaledX}}, {{scaledY}})`;
                                 // Update sliders via Streamlit
                                 window.Streamlit.setComponentValue('x_pos_{safe_media_key}', scaledX);
                                 window.Streamlit.setComponentValue('y_pos_{safe_media_key}', scaledY);
@@ -1474,6 +1474,7 @@ def main():
                         )
         else:
             st.error("Cannot process files due to license restrictions.")
+            
             
 if __name__ == "__main__":
     main()
