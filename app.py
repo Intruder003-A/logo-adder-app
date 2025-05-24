@@ -332,7 +332,7 @@ def increment_execution(user_id, file_name):
             st.error(f"Error updating execution count for {file_name}. Contact support.")
 
 # Apply patch (admin function)
-def apply_patch(user_id, new_count, days_valid, subscription_days_valid):
+def apply_patch(user_id, new_count, days_valid, subscription_days_valid, max_executions=None):
     if db is None:
         logging.error("Firestore client not initialized. Cannot generate patch.")
         st.error("Firestore unavailable. Cannot generate patch.")
@@ -343,18 +343,19 @@ def apply_patch(user_id, new_count, days_valid, subscription_days_valid):
         expiry = datetime.now(timezone.utc) + timedelta(days=days_valid)
         subscription_expiry = datetime.now(timezone.utc) + timedelta(days=subscription_days_valid)
         infinite_count = new_count == 0
+        effective_max_executions = max_executions if max_executions is not None else (new_count if infinite_count else new_count + Config.DEFAULT_MAX_EXECUTIONS)
         doc_ref.set({
             "user_id": user_id,
             "new_count": new_count,
             "infinite_count": infinite_count,
-            "max_executions": new_count if not infinite_count else Config.DEFAULT_MAX_EXECUTIONS,
+            "max_executions": effective_max_executions,
             "expiry": expiry,
             "subscription_expiry": subscription_expiry,
             "used": False,
             "created_at": datetime.now(timezone.utc)
         })
-        st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, Subscription valid for {subscription_days_valid} days, {new_count if new_count > 0 else 'Unlimited'} executions)")
-        logging.info(f"Patch generated: {patch_id} for user {user_id}, count={new_count}, infinite={infinite_count}, subscription_expiry={subscription_expiry}")
+        st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, Subscription valid for {subscription_days_valid} days, Start count={new_count}, Max executions={effective_max_executions})")
+        logging.info(f"Patch generated: {patch_id} for user {user_id}, count={new_count}, max_executions={effective_max_executions}, infinite={infinite_count}, subscription_expiry={subscription_expiry}")
         return patch_id
     except Exception as e:
         logging.error(f"Error generating patch for user {user_id}: {str(e)}\n{traceback.format_exc()}")
@@ -423,7 +424,7 @@ def validate_patch(patch_id, user_id):
             st.session_state.local_execution_count = data["new_count"]
 
         st.session_state.patch_applied = True
-        st.success(f"Patch {patch_id} applied successfully. Execution count reset to {data['new_count']}.")
+        st.success(f"Patch {patch_id} applied successfully. Execution count reset to {data['new_count']}, max executions set to {data['max_executions']}.")
         logging.info(f"Patch applied: {patch_id} for user {user_id}, count={data['new_count']}, max_executions={data['max_executions']}, infinite={data['infinite_count']}, expiry={data['expiry']}, subscription_expiry={data['subscription_expiry']}")
         return True
     except Exception as e:
@@ -772,19 +773,20 @@ def main():
     logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
 
     # Check license early (bypassed for admin)
-    if st.session_state.user_id != Config.ADMIN_USER_ID and not check_license(st.session_state.user_id) and not st.session_state.patch_applied:
+    if st.session_state.user_id != Config.ADMIN_USER_ID and not st.session_state.patch_applied and not check_license(st.session_state.user_id):
         st.subheader("Apply Patch")
         patch_id = st.text_input("Enter Patch ID")
         if st.button("Apply Patch"):
             if validate_patch(patch_id, st.session_state.user_id):
-                # Force re-check license after patch application
-                if check_license(st.session_state.user_id):
-                    st.rerun()
+                st.session_state.patch_applied = True
+                logging.info(f"Patch {patch_id} applied, rerunning app for user {st.session_state.user_id}")
+                st.rerun()
         return
-    elif st.session_state.patch_applied:
-        # Clear patch_applied flag after successful check
+
+    # Clear patch_applied flag after successful license check
+    if st.session_state.patch_applied and check_license(st.session_state.user_id):
         st.session_state.patch_applied = False
-        st.rerun()
+        logging.info(f"Patch applied and license check passed for user {st.session_state.user_id}, cleared patch_applied flag")
 
     # Load DNN model
     if State.net is None:
@@ -980,11 +982,12 @@ def main():
     if st.session_state.user_id == Config.ADMIN_USER_ID:
         st.subheader("Admin: Generate Patch")
         target_user = st.text_input("Target User ID")
-        new_count = st.number_input("New Execution Count (0 for unlimited)", min_value=0, value=0)
+        new_count = st.number_input("Start Execution Count (0 for unlimited)", min_value=0, value=0)
+        max_executions = st.number_input("Max Executions", min_value=new_count, value=new_count + Config.DEFAULT_MAX_EXECUTIONS)
         days_valid = st.number_input("License Days Valid", min_value=1, value=30)
         subscription_days_valid = st.number_input("Subscription Days Valid", min_value=1, value=30)
         if st.button("Generate Patch"):
-            patch_id = apply_patch(target_user, new_count, days_valid, subscription_days_valid)
+            patch_id = apply_patch(target_user, new_count, days_valid, subscription_days_valid, max_executions)
 
 if __name__ == "__main__":
     main()
