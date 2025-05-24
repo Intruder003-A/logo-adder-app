@@ -1345,12 +1345,12 @@ def main():
                     if preview_bytes:
                         st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
                         
-                        # JavaScript for click-to-position and drag
+                        # JavaScript for click-to-position and drag with debouncing
                         js_code = f"""
                         <script>
                         let isDragging_{safe_media_key} = false;
-                        let currentX_{safe_media_key} = 0;
-                        let currentY_{safe_media_key} = 0;
+                        let lastUpdateTime_{safe_media_key} = 0;
+                        const debounceDelay_{safe_media_key} = 100; // ms
 
                         function startDrag_{safe_media_key}(event) {{
                             event.preventDefault();
@@ -1360,7 +1360,11 @@ def main():
 
                         function drag_{safe_media_key}(event) {{
                             if (isDragging_{safe_media_key}) {{
-                                updatePosition_{safe_media_key}(event);
+                                const now = Date.now();
+                                if (now - lastUpdateTime_{safe_media_key} > debounceDelay_{safe_media_key}) {{
+                                    updatePosition_{safe_media_key}(event);
+                                    lastUpdateTime_{safe_media_key} = now;
+                                }}
                             }}
                         }}
 
@@ -1379,7 +1383,7 @@ def main():
                             const scaledY = Math.round(Math.max(0, Math.min(1000, y * scaleY)));
                             const input = document.querySelector('[data-click-pos="{safe_media_key}"]');
                             if (input) {{
-                                input.value = `(${scaledX}, ${scaledY})`;
+                                input.value = '(' + scaledX + ', ' + scaledY + ')';
                                 window.Streamlit.setComponentValue('x_pos_{safe_media_key}', scaledX);
                                 window.Streamlit.setComponentValue('y_pos_{safe_media_key}', scaledY);
                             }} else {{
