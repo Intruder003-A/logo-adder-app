@@ -64,15 +64,15 @@ except KeyError:
 # Configuration
 class Config:
     LOGO_SIZE_PERCENT = 0.5
-    LOGO_TRANSPARENCY = 0.7  # Increased for better visibility
+    LOGO_TRANSPARENCY = 0.7
     LOGO_OFFSET_PERCENT = 0.05
     DEFAULT_MAX_EXECUTIONS = 27
     EXECUTION_COLLECTION = "executions"
     LICENSE_COLLECTION = "licenses"
     FOLDERS = ["Logos", "Media", "Logoed_Media", "Blur_Preview"]
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    CONFIDENCE_THRESHOLD = 0.3  # Lowered for better detection
-    BLUR_KERNEL_FACTOR = 0.15  # Increased for noticeable blur
+    CONFIDENCE_THRESHOLD = 0.2  # Lowered for better detection
+    BLUR_KERNEL_FACTOR = 0.15
     YOLO_CONFIDENCE = 0.6
     USE_JAVASCRIPT_DOWNLOAD = False
     ADMIN_USER_ID = "CO9n9TnhWoclEtyuH8jfzsXs7tt2"
@@ -141,7 +141,7 @@ def detect_bodies(image, yolo_model):
 
 # Check if face is within or near a body
 def is_face_near_body(face_box, body_boxes, margin=0.2):
-    if not body_boxes:  # Fallback if no bodies detected
+    if not body_boxes:
         logging.info("No bodies detected, allowing all faces")
         return True
     fx1, fy1, fx2, fy2 = face_box
@@ -191,6 +191,8 @@ def process_frame(frame, face_detector, face_mesh, yolo_model, tracker, blur_ena
                 detections.append([[x1, y1, w, h], conf, 0])
             else:
                 logging.info(f"Face at ({x1}, {y1}, {x2}, {y2}) filtered out (no body nearby)")
+    else:
+        logging.warning("No faces detected by MediaPipe FaceDetection")
 
     tracks = tracker.update_tracks(detections, frame=rgb_frame)
     valid_faces = []
@@ -200,8 +202,8 @@ def process_frame(frame, face_detector, face_mesh, yolo_model, tracker, blur_ena
         bbox = track.to_tlbr().astype(int)
         x1, y1, x2, y2 = bbox
         valid_faces.append((x1, y1, x2, y2, track.track_id))
-
     logging.info(f"Valid tracked faces: {len(valid_faces)}")
+
     for x1, y1, x2, y2, track_id in valid_faces:
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(width - 1, x2), min(height - 1, y2)
@@ -224,6 +226,8 @@ def process_frame(frame, face_detector, face_mesh, yolo_model, tracker, blur_ena
                     ny = ny + y1
                     nose_tip = (nx, ny)
                     break
+        else:
+            logging.warning(f"No face landmarks detected for face at ({x1}, {y1}, {x2}, {y2})")
 
         blur_y2 = nose_tip[1] if nose_tip else y1 + int((y2 - y1) * 0.75)
         blur_y2 = min(blur_y2, y2)
@@ -385,18 +389,19 @@ def process_video(video_path, output_path, face_detector, face_mesh, yolo_model,
 
 # Review blurred regions
 def review_blurred_regions(blurred_regions, media_type, base_path, media_name):
-    if not blurred_regions:
-        st.info("No faces detected for blurring.")
-        return True
     st.subheader("Review Blurred Regions")
     approved = True
     preview_path = os.path.join(base_path, "Blur_Preview", f"preview_{media_name}")
     os.makedirs(os.path.dirname(preview_path), exist_ok=True)
 
+    if not blurred_regions:
+        st.warning("No faces detected for blurring. The image will be processed with the logo only.")
+        return True
+
     if media_type == "image":
         frame = blurred_regions[0]["frame"]
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        st.image(frame_rgb, caption="Blurred Image Preview", use_column_width=True)
+        st.image(frame_rgb, caption="Blurred Image Preview", use_container_width=True)
         for region in blurred_regions:
             x1, y1, x2, y2 = region["bbox"]
             st.write(f"Face at ({x1}, {y1}, {x2}, {y2})")
@@ -413,7 +418,7 @@ def review_blurred_regions(blurred_regions, media_type, base_path, media_name):
                 continue
             frame = regions[0]["frame"]
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            st.image(frame_rgb, caption=f"Frame {idx} Preview", use_column_width=True)
+            st.image(frame_rgb, caption=f"Frame {idx} Preview", use_container_width=True)
             for region in regions:
                 x1, y1, x2, y2 = region["bbox"]
                 track_id = region["track_id"]
@@ -815,7 +820,7 @@ def debug_license_limits(admin_user_id):
                     current_expiry = current_expiry.replace(tzinfo=timezone.utc)
                 if current_sub_expiry.tzinfo is None:
                     current_sub_expiry = current_sub_expiry.replace(tzinfo=timezone.utc)
-                st.write信号(f"Current Count: {current_count}")
+                st.write(f"Current Count: {current_count}")
                 st.write(f"Current Max Executions: {current_max}")
                 st.write(f"Infinite Count Enabled: {current_infinite}")
                 st.write(f"Current License Expiry: {current_expiry}")
@@ -1066,7 +1071,7 @@ def main():
         for media_file in new_files:
             increment_execution(st.session_state.user_id, media_file.name)
         st.session_state.media_files = media_files
-        st.session_state.blur_reviewed = {}  # Clear previous reviews
+        st.session_state.blur_reviewed = {}
         if new_files:
             st.rerun()
 
@@ -1168,10 +1173,12 @@ def main():
                                 st.session_state.blur_enabled
                             )
                             # Preview blurred image
-                            st.image(blurred_image, caption="Blur Preview (Before Logo)", use_column_width=True)
+                            st.image(blurred_image, caption="Blur Preview (Before Logo)", use_container_width=True)
+                            if not blurred_regions:
+                                st.warning("No faces detected for blurring. The image will be processed with the logo only.")
                         else:
                             blurred_image = image
-                        if st.session_state.blur_enabled and blurred_regions:
+                        if st.session_state.blur_enabled:
                             if media_file.name not in st.session_state.blur_reviewed:
                                 approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
                                 st.session_state.blur_reviewed[media_file.name] = approved
@@ -1194,7 +1201,7 @@ def main():
                             State.tracker,
                             st.session_state.blur_enabled
                         )
-                        if st.session_state.blur_enabled and blurred_regions:
+                        if st.session_state.blur_enabled:
                             if media_file.name not in st.session_state.blur_reviewed:
                                 approved = review_blurred_regions(blurred_regions, media_type, base_path, media_file.name)
                                 st.session_state.blur_reviewed[media_file.name] = approved
