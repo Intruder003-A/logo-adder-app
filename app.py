@@ -1035,7 +1035,7 @@ def debug_license_limits(admin_user_id):
         st.warning("Firestore unavailable. Debug tools limited.")
 
 # Streamlit app
-def main():
+ddef main():
     st.set_page_config(page_title="Logo Adder App", layout="wide")
     st.title("Logo Adder App")
 
@@ -1193,10 +1193,12 @@ def main():
     logo_file = st.file_uploader("Upload Logo (PNG with transparency recommended)", type=["png", "jpg", "jpeg"])
     media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4"], accept_multiple_files=True)
 
-    # Clear output_files when new media files are uploaded
+    # Clear output_files when new media files are uploaded or on app start
     if media_files and media_files != st.session_state.get('last_media_files', []):
         st.session_state.output_files = []
         st.session_state.last_media_files = media_files
+    elif not media_files:
+        st.session_state.output_files = []
 
     # Logo position selection
     st.header("Logo Position")
@@ -1366,85 +1368,92 @@ def main():
                 
                 with col_preview:
                     # Generate preview with debug logging
-                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}")
+                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}, opacity={opacity}")
                     preview_bytes = generate_preview_image(
                         media_file,
                         logo_path,
                         custom_position=(x_pos, y_pos),
                         scale=scale,
-                        rotation=rotation
+                        rotation=rotation,
+                        opacity=opacity
                     )
                     if preview_bytes:
                         st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
                         
-                        # JavaScript for click-to-position and drag with wrapper div
+                        # JavaScript for click-to-position and drag with DOMContentLoaded
                         js_code = f"""
                         <script>
-                        let isDragging_{safe_media_key} = false;
-                        let pendingUpdate_{safe_media_key} = null;
+                        document.addEventListener('DOMContentLoaded', function() {{
+                            let isDragging_{safe_media_key} = false;
+                            let pendingUpdate_{safe_media_key} = null;
 
-                        function startDrag_{safe_media_key}(event) {{
-                            event.preventDefault();
-                            console.log('Start drag for {safe_media_key}');
-                            logging.info('JavaScript: Start drag for {safe_media_key}');
-                            isDragging_{safe_media_key} = true;
-                            updatePosition_{safe_media_key}(event);
-                        }}
-
-                        function drag_{safe_media_key}(event) {{
-                            if (isDragging_{safe_media_key}) {{
-                                console.log('Dragging {safe_media_key}');
-                                logging.info('JavaScript: Dragging {safe_media_key}');
-                                pendingUpdate_{safe_media_key} = event;
+                            function startDrag_{safe_media_key}(event) {{
+                                event.preventDefault();
+                                console.log('Start drag for {safe_media_key}');
+                                logging.info('JavaScript: Start drag for {safe_media_key}');
+                                isDragging_{safe_media_key} = true;
+                                updatePosition_{safe_media_key}(event);
                             }}
-                        }}
 
-                        function stopDrag_{safe_media_key}() {{
-                            console.log('Stop drag for {safe_media_key}');
-                            logging.info('JavaScript: Stop drag for {safe_media_key}');
-                            if (isDragging_{safe_media_key} && pendingUpdate_{safe_media_key}) {{
-                                updatePosition_{safe_media_key}(pendingUpdate_{safe_media_key});
+                            function drag_{safe_media_key}(event) {{
+                                if (isDragging_{safe_media_key}) {{
+                                    console.log('Dragging {safe_media_key}');
+                                    logging.info('JavaScript: Dragging {safe_media_key}');
+                                    pendingUpdate_{safe_media_key} = event;
+                                }}
                             }}
-                            isDragging_{safe_media_key} = false;
-                            pendingUpdate_{safe_media_key} = null;
-                        }}
 
-                        function updatePosition_{safe_media_key}(event) {{
-                            console.log('Updating position for {safe_media_key}');
-                            logging.info('JavaScript: Updating position for {safe_media_key}');
-                            const img = document.getElementById('preview_{safe_media_key}');
-                            const rect = img.getBoundingClientRect();
-                            const x = event.clientX - rect.left;
-                            const y = event.clientY - rect.top;
-                            const scaleX = 1000 / rect.width;
-                            const scaleY = 1000 / rect.height;
-                            const scaledX = Math.round(Math.max(0, Math.min(1000, x * scaleX)));
-                            const scaledY = Math.round(Math.max(0, Math.min(1000, y * scaleY)));
-                            const input = document.querySelector('[data-click-pos="{safe_media_key}"]');
-                            if (input) {{
-                                input.value = '(' + scaledX + ', ' + scaledY + ')';
-                                window.Streamlit.setComponentValue('x_pos_{safe_media_key}', scaledX);
-                                window.Streamlit.setComponentValue('y_pos_{safe_media_key}', scaledY);
+                            function stopDrag_{safe_media_key}() {{
+                                console.log('Stop drag for {safe_media_key}');
+                                logging.info('JavaScript: Stop drag for {safe_media_key}');
+                                if (isDragging_{safe_media_key} && pendingUpdate_{safe_media_key}) {{
+                                    updatePosition_{safe_media_key}(pendingUpdate_{safe_media_key});
+                                }}
+                                isDragging_{safe_media_key} = false;
+                                pendingUpdate_{safe_media_key} = null;
+                            }}
+
+                            function updatePosition_{safe_media_key}(event) {{
+                                console.log('Updating position for {safe_media_key}');
+                                logging.info('JavaScript: Updating position for {safe_media_key}');
+                                const img = document.getElementById('preview_{safe_media_key}');
+                                if (!img) {{
+                                    console.error('Image element for {safe_media_key} not found');
+                                    return;
+                                }}
+                                const rect = img.getBoundingClientRect();
+                                const x = event.clientX - rect.left;
+                                const y = event.clientY - rect.top;
+                                const scaleX = 1000 / rect.width;
+                                const scaleY = 1000 / rect.height;
+                                const scaledX = Math.round(Math.max(0, Math.min(1000, x * scaleX)));
+                                const scaledY = Math.round(Math.max(0, Math.min(1000, y * scaleY)));
+                                const input = document.querySelector('[data-click-pos="{safe_media_key}"]');
+                                if (input) {{
+                                    input.value = '(' + scaledX + ', ' + scaledY + ')';
+                                    window.Streamlit.setComponentValue('x_pos_{safe_media_key}', scaledX);
+                                    window.Streamlit.setComponentValue('y_pos_{safe_media_key}', scaledY);
+                                }} else {{
+                                    console.error('Input element for {safe_media_key} not found');
+                                }}
+                            }}
+
+                            // Attach event listeners to wrapper div
+                            const wrapper_{safe_media_key} = document.getElementById('wrapper_{safe_media_key}');
+                            if (wrapper_{safe_media_key}) {{
+                                console.log('Attaching event listeners for {safe_media_key}');
+                                logging.info('JavaScript: Attaching event listeners for {safe_media_key}');
+                                wrapper_{safe_media_key}.addEventListener('mousedown', startDrag_{safe_media_key});
+                                wrapper_{safe_media_key}.addEventListener('mousemove', drag_{safe_media_key});
+                                wrapper_{safe_media_key}.addEventListener('mouseup', stopDrag_{safe_media_key});
+                                wrapper_{safe_media_key}.addEventListener('mouseleave', stopDrag_{safe_media_key});
                             }} else {{
-                                console.error('Input element for {safe_media_key} not found');
+                                console.error('Wrapper element for {safe_media_key} not found');
                             }}
-                        }}
 
-                        // Attach event listeners to wrapper div
-                        const wrapper_{safe_media_key} = document.getElementById('wrapper_{safe_media_key}');
-                        if (wrapper_{safe_media_key}) {{
-                            console.log('Attaching event listeners for {safe_media_key}');
-                            logging.info('JavaScript: Attaching event listeners for {safe_media_key}');
-                            wrapper_{safe_media_key}.addEventListener('mousedown', startDrag_{safe_media_key});
-                            wrapper_{safe_media_key}.addEventListener('mousemove', drag_{safe_media_key});
-                            wrapper_{safe_media_key}.addEventListener('mouseup', stopDrag_{safe_media_key});
-                            wrapper_{safe_media_key}.addEventListener('mouseleave', stopDrag_{safe_media_key});
-                        }} else {{
-                            console.error('Wrapper element for {safe_media_key} not found');
-                        }}
-
-                        // Ensure drag stops globally
-                        document.addEventListener('mouseup', stopDrag_{safe_media_key});
+                            // Ensure drag stops globally
+                            document.addEventListener('mouseup', stopDrag_{safe_media_key});
+                        }});
                         </script>
                         <div id="wrapper_{safe_media_key}" style="position: relative; cursor: move;">
                             <img id="preview_{safe_media_key}" 
@@ -1592,15 +1601,23 @@ def main():
     # Display download buttons for processed files
     if st.session_state.output_files:
         st.header("Download Processed Files")
-        for file_path, file_name, file_data in st.session_state.output_files:
-            st.download_button(
-                label=f"Download {file_name}",
-                data=file_data,
-                file_name=file_name,
-                mime="image/png" if file_name.lower().endswith((".jpg", "jpeg", "png")) else "video/mp4",
-                key=f"download_{file_name}"
-            )
-            
+        logging.info(f"Output files: {st.session_state.output_files}")
+        for file_entry in st.session_state.output_files:
+            if not isinstance(file_entry, tuple) or len(file_entry) != 3:
+                logging.error(f"Invalid output file entry: {file_entry}")
+                continue
+            file_path, file_name, file_data = file_entry
+            try:
+                st.download_button(
+                    label=f"Download {file_name}",
+                    data=file_data,
+                    file_name=file_name,
+                    mime="image/png" if file_name.lower().endswith((".jpg", "jpeg", "png")) else "video/mp4",
+                    key=f"download_{file_name}"
+                )
+            except Exception as e:
+                st.error(f"Error rendering download button for {file_name}: {str(e)}")
+                logging.error(f"Error rendering download button for {file_name}: {str(e)}\n{traceback.format_exc()}")
                         
 if __name__ == "__main__":
     main()
