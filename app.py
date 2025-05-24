@@ -1296,6 +1296,7 @@ def main():
                         "rotation": 0,
                         "opacity": 1.0
                     }
+                logging.info(f"Initialized logo position for {media_key}: x_pos={initial_x}, y_pos={initial_y}")
                 
                 st.markdown(f"### Positioning for {media_key}")
                 col_preview, col_controls = st.columns([3, 2])
@@ -1365,28 +1366,27 @@ def main():
                 
                 with col_preview:
                     # Generate preview with debug logging
-                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}, opacity={opacity}")
+                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}")
                     preview_bytes = generate_preview_image(
                         media_file,
                         logo_path,
                         custom_position=(x_pos, y_pos),
                         scale=scale,
-                        rotation=rotation,
-                        opacity=opacity
+                        rotation=rotation
                     )
                     if preview_bytes:
                         st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
                         
-                        # JavaScript for click-to-position and drag with debug logging
+                        # JavaScript for click-to-position and drag with wrapper div
                         js_code = f"""
                         <script>
                         let isDragging_{safe_media_key} = false;
+                        let pendingUpdate_{safe_media_key} = null;
 
                         function startDrag_{safe_media_key}(event) {{
                             event.preventDefault();
- resposta de Grok 3:
-
                             console.log('Start drag for {safe_media_key}');
+                            logging.info('JavaScript: Start drag for {safe_media_key}');
                             isDragging_{safe_media_key} = true;
                             updatePosition_{safe_media_key}(event);
                         }}
@@ -1394,17 +1394,24 @@ def main():
                         function drag_{safe_media_key}(event) {{
                             if (isDragging_{safe_media_key}) {{
                                 console.log('Dragging {safe_media_key}');
-                                updatePosition_{safe_media_key}(event);
+                                logging.info('JavaScript: Dragging {safe_media_key}');
+                                pendingUpdate_{safe_media_key} = event;
                             }}
                         }}
 
                         function stopDrag_{safe_media_key}() {{
                             console.log('Stop drag for {safe_media_key}');
+                            logging.info('JavaScript: Stop drag for {safe_media_key}');
+                            if (isDragging_{safe_media_key} && pendingUpdate_{safe_media_key}) {{
+                                updatePosition_{safe_media_key}(pendingUpdate_{safe_media_key});
+                            }}
                             isDragging_{safe_media_key} = false;
+                            pendingUpdate_{safe_media_key} = null;
                         }}
 
                         function updatePosition_{safe_media_key}(event) {{
                             console.log('Updating position for {safe_media_key}');
+                            logging.info('JavaScript: Updating position for {safe_media_key}');
                             const img = document.getElementById('preview_{safe_media_key}');
                             const rect = img.getBoundingClientRect();
                             const x = event.clientX - rect.left;
@@ -1423,24 +1430,28 @@ def main():
                             }}
                         }}
 
-                        // Attach event listeners
-                        const img_{safe_media_key} = document.getElementById('preview_{safe_media_key}');
-                        if (img_{safe_media_key}) {{
-                            img_{safe_media_key}.addEventListener('mousedown', startDrag_{safe_media_key});
-                            img_{safe_media_key}.addEventListener('mousemove', drag_{safe_media_key});
-                            img_{safe_media_key}.addEventListener('mouseup', stopDrag_{safe_media_key});
-                            img_{safe_media_key}.addEventListener('mouseleave', stopDrag_{safe_media_key});
+                        // Attach event listeners to wrapper div
+                        const wrapper_{safe_media_key} = document.getElementById('wrapper_{safe_media_key}');
+                        if (wrapper_{safe_media_key}) {{
+                            console.log('Attaching event listeners for {safe_media_key}');
+                            logging.info('JavaScript: Attaching event listeners for {safe_media_key}');
+                            wrapper_{safe_media_key}.addEventListener('mousedown', startDrag_{safe_media_key});
+                            wrapper_{safe_media_key}.addEventListener('mousemove', drag_{safe_media_key});
+                            wrapper_{safe_media_key}.addEventListener('mouseup', stopDrag_{safe_media_key});
+                            wrapper_{safe_media_key}.addEventListener('mouseleave', stopDrag_{safe_media_key});
                         }} else {{
-                            console.error('Image element for {safe_media_key} not found');
+                            console.error('Wrapper element for {safe_media_key} not found');
                         }}
 
                         // Ensure drag stops globally
                         document.addEventListener('mouseup', stopDrag_{safe_media_key});
                         </script>
-                        <img id="preview_{safe_media_key}" 
-                             src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
-                             data-click-pos="{safe_media_key}"
-                             style="cursor: move; max-width: 100%;">
+                        <div id="wrapper_{safe_media_key}" style="position: relative; cursor: move;">
+                            <img id="preview_{safe_media_key}" 
+                                 src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
+                                 data-click-pos="{safe_media_key}"
+                                 style="max-width: 100%;">
+                        </div>
                         """
                         st.markdown(js_code, unsafe_allow_html=True)
                     else:
