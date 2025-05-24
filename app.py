@@ -73,6 +73,7 @@ class Config:
     CONFIDENCE_THRESHOLD = 0.2
     LOGO_OFFSET_PERCENT = 0.1
     USE_JAVASCRIPT_DOWNLOAD = False
+    ADMIN_USER_ID = "CO9n9TnhWoclEtyuH8jfzsXs7tt2"
 
 # State management
 class State:
@@ -199,6 +200,14 @@ def process_video(video_path, output_path, net, blur_enabled):
 
 # Check license and execution count
 def check_license(user_id):
+    if user_id == Config.ADMIN_USER_ID:
+        logging.info(f"Admin user {user_id} bypasses license and subscription checks.")
+        State.execution_count = 0
+        State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+        State.infinite_count = True
+        State.license_expiry = datetime.now(timezone.utc) + timedelta(days=3650)  # 10 years
+        State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=3650)
+        return True
     if not user_id:
         logging.error("No user_id provided for license check.")
         st.error("User not authenticated. Please log in.")
@@ -210,9 +219,9 @@ def check_license(user_id):
             st.session_state.local_execution_count = 0
         State.execution_count = st.session_state.local_execution_count
         State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+        State.infinite_count = False
         State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
         State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
-        State.infinite_count = False
         if not State.infinite_count and State.execution_count >= State.max_executions:
             st.error("Execution limit reached. Contact the service team for a new patch.")
             return False
@@ -290,6 +299,9 @@ def check_license(user_id):
 
 # Increment execution count
 def increment_execution(user_id, file_name):
+    if user_id == Config.ADMIN_USER_ID:
+        logging.info(f"Admin user {user_id} bypasses execution count increment for file {file_name}.")
+        return
     if not user_id:
         logging.warning(f"No user_id for execution count increment for file {file_name}. Skipping.")
         State.execution_count += 1
@@ -350,6 +362,10 @@ def apply_patch(user_id, new_count, days_valid, subscription_days_valid):
 
 # Validate and apply patch
 def validate_patch(patch_id, user_id):
+    if user_id == Config.ADMIN_USER_ID:
+        logging.info(f"Admin user {user_id} does not require patch application.")
+        st.info("Admin users do not need to apply patches.")
+        return True
     if db is None:
         logging.error("Firestore client not initialized. Cannot apply patch.")
         st.error("Firestore unavailable. Cannot apply patch.")
@@ -562,7 +578,7 @@ def debug_license_limits(admin_user_id):
         st.error("No user_id for debug license limits.")
         return
     st.subheader("Debug License Limits")
-    st.write(f"Firestore Status: {' PREMIUM Connected' if db is not None else 'Disconnected'}")
+    st.write(f"Firestore Status: {'Connected' if db is not None else 'Disconnected'}")
     target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
     if target_user_id and db is not None:
         try:
@@ -738,8 +754,8 @@ def main():
 
     logging.info(f"Session state after login: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}")
 
-    # Check license early
-    if not check_license(st.session_state.user_id) and not st.session_state.patch_applied:
+    # Check license early (bypassed for admin)
+    if st.session_state.user_id != Config.ADMIN_USER_ID and not check_license(st.session_state.user_id) and not st.session_state.patch_applied:
         st.subheader("Apply Patch")
         patch_id = st.text_input("Enter Patch ID")
         if st.button("Apply Patch"):
@@ -758,7 +774,7 @@ def main():
             st.warning("Face detection model failed to load. Blurring functionality will be disabled.")
 
     # Admin debug tools
-    if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
+    if st.session_state.user_id == Config.ADMIN_USER_ID:
         debug_license_limits(st.session_state.user_id)
 
     # File upload and processing
@@ -922,7 +938,7 @@ def main():
                     st.button("Download All Files", key=f"download_all_btn_{uuid.uuid4()}", help="Download all logoed files")
 
     # Debug session state (admin only)
-    if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
+    if st.session_state.user_id == Config.ADMIN_USER_ID:
         st.subheader("Debug Session State")
         st.write(f"user: {st.session_state.user}")
         st.write(f"user_id: {st.session_state.user_id}")
@@ -942,7 +958,7 @@ def main():
         logging.info(f"Debug output displayed for admin: user={st.session_state.user}")
 
     # Admin panel
-    if st.session_state.user == "CO9n9TnhWoclEtyuH8jfzsXs7tt2":
+    if st.session_state.user_id == Config.ADMIN_USER_ID:
         st.subheader("Admin: Generate Patch")
         target_user = st.text_input("Target User ID")
         new_count = st.number_input("New Execution Count (0 for unlimited)", min_value=0, value=0)
