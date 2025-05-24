@@ -357,20 +357,26 @@ def apply_patch(user_id, new_count, days_valid, subscription_days_valid, max_exe
         doc_ref = db.collection(Config.LICENSE_COLLECTION).document(patch_id)
         expiry = datetime.now(timezone.utc) + timedelta(days=days_valid)
         subscription_expiry = datetime.now(timezone.utc) + timedelta(days=subscription_days_valid)
-        infinite_count = new_count == 0 and max_executions == 0
-        effective_max_executions = max_executions if max_executions is not None else (Config.DEFAULT_MAX_EXECUTIONS if infinite_count else new_count + Config.DEFAULT_MAX_EXECUTIONS)
+        infinite_count = max_executions == 0
+        if max_executions is None:
+            max_executions = Config.DEFAULT_MAX_EXECUTIONS
+        if max_executions > 0 and new_count > max_executions:
+            st.error(f"Start Execution Count ({new_count}) cannot exceed Max Executions ({max_executions}).")
+            logging.error(f"Invalid patch parameters: new_count={new_count} > max_executions={max_executions}")
+            return None
         doc_ref.set({
             "user_id": user_id,
             "new_count": new_count,
             "infinite_count": infinite_count,
-            "max_executions": effective_max_executions,
+            "max_executions": max_executions,
             "expiry": expiry,
             "subscription_expiry": subscription_expiry,
             "used": False,
             "created_at": datetime.now(timezone.utc)
         })
-        st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, Subscription valid for {subscription_days_valid} days, Start count={new_count}, Max executions={effective_max_executions})")
-        logging.info(f"Patch generated: {patch_id} for user {user_id}, count={new_count}, max_executions={effective_max_executions}, infinite={infinite_count}, subscription_expiry={subscription_expiry}")
+        execution_limit_msg = "Infinite executions" if infinite_count else f"Max executions={max_executions}"
+        st.success(f"Patch ID: {patch_id} (Valid for {days_valid} days, Subscription valid for {subscription_days_valid} days, Start count={new_count}, {execution_limit_msg})")
+        logging.info(f"Patch generated: {patch_id} for user {user_id}, count={new_count}, max_executions={max_executions}, infinite={infinite_count}, expiry={expiry}, subscription_expiry={subscription_expiry}")
         return patch_id
     except Exception as e:
         logging.error(f"Error generating patch for user {user_id}: {str(e)}\n{traceback.format_exc()}")
@@ -643,6 +649,21 @@ def debug_license_limits(admin_user_id):
                     State.execution_count = custom_count if target_user_id == admin_user_id else State.execution_count
                     st.success(f"Execution count set to {custom_count}. Reload to continue.")
                     logging.info(f"Debug: Set execution count to {custom_count} for user {target_user_id}")
+                custom_max = st.number_input("Set Custom Max Executions", min_value=0, value=current_max, key="custom_max_executions")
+                if st.button("Apply Custom Max Executions", key="apply_custom_max"):
+                    if custom_max > 0 and custom_max < current_count:
+                        st.error(f"Max Executions ({custom_max}) cannot be less than Current Count ({current_count}).")
+                        logging.error(f"Invalid max_executions: {custom_max} < count={current_count} for user {target_user_id}")
+                    else:
+                        doc_ref.update({
+                            "max_executions": custom_max,
+                            "infinite_count": custom_max == 0
+                        })
+                        if target_user_id == admin_user_id:
+                            State.max_executions = custom_max
+                            State.infinite_count = custom_max == 0
+                        st.success(f"Max executions set to {custom_max}{' (infinite)' if custom_max == 0 else ''}. Reload to continue.")
+                        logging.info(f"Debug: Set max_executions to {custom_max}, infinite_count={custom_max == 0} for user {target_user_id}")
             with col2:
                 expiry_days = st.number_input("Set License Expiry Days", min_value=1, value=30, key="expiry_days")
                 if st.button("Apply Expiry Days", key="apply_expiry_days"):
@@ -1033,8 +1054,8 @@ def main():
     if st.session_state.user_id == Config.ADMIN_USER_ID:
         st.subheader("Admin: Generate Patch")
         target_user = st.text_input("Target User ID")
-        new_count = st.number_input("Start Execution Count (0 for unlimited)", min_value=0, value=0)
-        max_executions = st.number_input("Max Executions", min_value=new_count, value=new_count + Config.DEFAULT_MAX_EXECUTIONS)
+        new_count = st.number_input("Start Execution Count", min_value=0, value=0)
+        max_executions = st.number_input("Max Executions (0 for infinite)", min_value=0, value=Config.DEFAULT_MAX_EXECUTIONS)
         days_valid = st.number_input("License Days Valid", min_value=1, value=30)
         subscription_days_valid = st.number_input("Subscription Days Valid", min_value=1, value=30)
         if st.button("Generate Patch"):
