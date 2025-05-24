@@ -1060,6 +1060,8 @@ def main():
         st.session_state.auth_error = None
     if 'reset_message' not in st.session_state:
         st.session_state.reset_message = None
+    if 'output_files' not in st.session_state:
+        st.session_state.output_files = []  # Store processed files for download
     logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
     logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}, blur_enabled={st.session_state.blur_enabled}, manual_positioning={st.session_state.manual_positioning}")
 
@@ -1129,6 +1131,7 @@ def main():
                 st.session_state.selected_position = "Center"
                 st.session_state.auth_error = None
                 st.session_state.reset_message = None
+                st.session_state.output_files = []
                 st.success("Logged out successfully.")
                 logging.info(f"User logged out: {st.session_state.user}")
                 st.rerun()
@@ -1182,13 +1185,18 @@ def main():
     ensure_directories(Config.BASE_DIR)
 
     # Initialize AI models if not already done
-    if State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None:
+    if not all([State.face_detector, State.face_mesh, State.yolo_model, State.tracker, State.dnn_net]):
         initialize_ai_models()
 
     # File upload section
     st.header("Upload Files")
     logo_file = st.file_uploader("Upload Logo (PNG with transparency recommended)", type=["png", "jpg", "jpeg"])
     media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4"], accept_multiple_files=True)
+
+    # Clear output_files when new media files are uploaded
+    if media_files and media_files != st.session_state.get('last_media_files', []):
+        st.session_state.output_files = []
+        st.session_state.last_media_files = media_files
 
     # Logo position selection
     st.header("Logo Position")
@@ -1273,10 +1281,43 @@ def main():
                 
                 with col_controls:
                     st.markdown("**Adjust Logo Settings**")
-                    x_pos = st.slider("X Position", 0, 1000, st.session_state.logo_positions[media_key]["x_pos"], key=f"x_pos_{safe_media_key}")
-                    y_pos = st.slider("Y Position", 0, 1000, st.session_state.logo_positions[media_key]["y_pos"], key=f"y_pos_{safe_media_key}")
-                    scale = st.slider("Scale", 0.5, 2.0, st.session_state.logo_positions[media_key]["scale"], step=0.1, key=f"scale_{safe_media_key}")
-                    rotation = st.slider("Rotation (degrees)", -180, 180, st.session_state.logo_positions[media_key]["rotation"], step=1, key=f"rotation_{safe_media_key}")
+                    def update_position():
+                        st.rerun()
+                    
+                    x_pos = st.slider(
+                        "X Position",
+                        0,
+                        1000,
+                        st.session_state.logo_positions[media_key]["x_pos"],
+                        key=f"x_pos_{safe_media_key}",
+                        on_change=update_position
+                    )
+                    y_pos = st.slider(
+                        "Y Position",
+                        0,
+                        1000,
+                        st.session_state.logo_positions[media_key]["y_pos"],
+                        key=f"y_pos_{safe_media_key}",
+                        on_change=update_position
+                    )
+                    scale = st.slider(
+                        "Scale",
+                        0.5,
+                        2.0,
+                        st.session_state.logo_positions[media_key]["scale"],
+                        step=0.1,
+                        key=f"scale_{safe_media_key}",
+                        on_change=update_position
+                    )
+                    rotation = st.slider(
+                        "Rotation (degrees)",
+                        -180,
+                        180,
+                        st.session_state.logo_positions[media_key]["rotation"],
+                        step=1,
+                        key=f"rotation_{safe_media_key}",
+                        on_change=update_position
+                    )
                     
                     # Update session state
                     st.session_state.logo_positions[media_key].update({
@@ -1360,6 +1401,9 @@ def main():
 
     # Process files
     if st.button("Process Files") and logo_file and media_files:
+        # Clear output_files before processing new files
+        st.session_state.output_files = []
+        
         if check_license(st.session_state.user_id):
             logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
             try:
@@ -1370,7 +1414,6 @@ def main():
                 st.error(f"Failed to save logo file: {str(e)}")
                 logging.error(f"Error saving logo file to {logo_path}: {str(e)}\n{traceback.format_exc()}")
                 return
-            output_files = []
 
             for media_file in media_files:
                 media_path = os.path.join(Config.BASE_DIR, "Media", media_file.name)
@@ -1452,28 +1495,24 @@ def main():
                     # Read output file for download
                     with open(output_path, "rb") as f:
                         output_data = f.read()
-                    output_files.append((output_path, output_filename, output_data))
+                    st.session_state.output_files.append((output_path, output_filename, output_data))
                     increment_execution(st.session_state.user_id, media_file.name)
                     st.success(f"Processed {media_file.name} successfully!")
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {str(e)}")
                     logging.error(f"Error processing {media_file.name}: {str(e)}\n{traceback.format_exc()}")
 
-            # Provide download options
-            if output_files:
-                st.header("Download Processed Files")
-                if Config.USE_JAVASCRIPT_DOWNLOAD and len(output_files) > 1:
-                    trigger_multiple_downloads(output_files)
-                else:
-                    for file_path, file_name, file_data in output_files:
-                        st.download_button(
-                            label=f"Download {file_name}",
-                            data=file_data,
-                            file_name=file_name,
-                            mime="image/png" if file_name.lower().endswith((".jpg", "jpeg", "png")) else "video/mp4"
-                        )
-        else:
-            st.error("Cannot process files due to license restrictions.")
+    # Display download buttons for processed files
+    if st.session_state.output_files:
+        st.header("Download Processed Files")
+        for file_path, file_name, file_data in st.session_state.output_files:
+            st.download_button(
+                label=f"Download {file_name}",
+                data=file_data,
+                file_name=file_name,
+                mime="image/png" if file_name.lower().endswith((".jpg", "jpeg", "png")) else "video/mp4",
+                key=f"download_{file_name}"
+            )
             
                         
 if __name__ == "__main__":
