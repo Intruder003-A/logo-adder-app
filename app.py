@@ -1162,90 +1162,103 @@ def main():
 
     # Logo position selection
     st.header("Logo Position")
-    position_option = st.selectbox("Select Logo Position", ["Manual", "Center", "Top", "Bottom", "Left", "Right", "Top Left", "Top Right", "Left Center", "Right Center", "Left Bottom", "Right Bottom"], index=1)
+    position_options = ["Manual", "Center", "Top", "Bottom", "Left", "Right", "Top Left", "Top Right", "Left Center", "Right Center", "Left Bottom", "Right Bottom"]
+    position_option = st.selectbox("Select Logo Position", position_options, index=0, key="logo_position_select")
     custom_positions = {}
-    if position_option == "Manual" and media_files and logo_file:
+    
+    # Debug information
+    st.write("**Debug Info**")
+    st.write(f"- Selected Position: {position_option}")
+    st.write(f"- Logo File Uploaded: {'Yes' if logo_file else 'No'}")
+    st.write(f"- Media Files Uploaded: {len(media_files) if media_files else 0}")
+    logging.info(f"Logo position selected: {position_option}, logo_file={bool(logo_file)}, media_files_count={len(media_files) if media_files else 0}")
+
+    if position_option == "Manual":
         st.subheader("Manual Logo Positioning")
-        logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
-        with open(logo_path, "wb") as f:
-            f.write(logo_file.getbuffer())
-        
-        for media_file in media_files:
-            media_key = media_file.name
-            if media_key not in st.session_state.logo_positions:
-                st.session_state.logo_positions[media_key] = {
-                    "x_pos": 500,
-                    "y_pos": 500,
-                    "scale": 1.0,
-                    "rotation": 0
-                }
+        if not logo_file or not media_files:
+            st.warning("Please upload both a logo and at least one media file to configure manual positioning.")
+            logging.info("Manual positioning UI skipped: logo_file or media_files missing")
+        else:
+            logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
+            with open(logo_path, "wb") as f:
+                f.write(logo_file.getbuffer())
             
-            st.markdown(f"### Positioning for {media_key}")
-            col_preview, col_controls = st.columns([3, 2])
-            
-            with col_controls:
-                st.markdown("**Adjust Logo Settings**")
-                x_pos = st.slider("X Position", 0, 1000, st.session_state.logo_positions[media_key]["x_pos"], key=f"x_pos_{media_key}")
-                y_pos = st.slider("Y Position", 0, 1000, st.session_state.logo_positions[media_key]["y_pos"], key=f"y_pos_{media_key}")
-                scale = st.slider("Scale", 0.5, 2.0, st.session_state.logo_positions[media_key]["scale"], step=0.1, key=f"scale_{media_key}")
-                rotation = st.slider("Rotation (degrees)", -180, 180, st.session_state.logo_positions[media_key]["rotation"], step=1, key=f"rotation_{media_key}")
+            for media_file in media_files:
+                media_key = media_file.name
+                if media_key not in st.session_state.logo_positions:
+                    st.session_state.logo_positions[media_key] = {
+                        "x_pos": 500,
+                        "y_pos": 500,
+                        "scale": 1.0,
+                        "rotation": 0
+                    }
                 
-                # Update session state
-                st.session_state.logo_positions[media_key].update({
-                    "x_pos": x_pos,
-                    "y_pos": y_pos,
+                st.markdown(f"### Positioning for {media_key}")
+                col_preview, col_controls = st.columns([3, 2])
+                
+                with col_controls:
+                    st.markdown("**Adjust Logo Settings**")
+                    x_pos = st.slider("X Position", 0, 1000, st.session_state.logo_positions[media_key]["x_pos"], key=f"x_pos_{media_key}")
+                    y_pos = st.slider("Y Position", 0, 1000, st.session_state.logo_positions[media_key]["y_pos"], key=f"y_pos_{media_key}")
+                    scale = st.slider("Scale", 0.5, 2.0, st.session_state.logo_positions[media_key]["scale"], step=0.1, key=f"scale_{media_key}")
+                    rotation = st.slider("Rotation (degrees)", -180, 180, st.session_state.logo_positions[media_key]["rotation"], step=1, key=f"rotation_{media_key}")
+                    
+                    # Update session state
+                    st.session_state.logo_positions[media_key].update({
+                        "x_pos": x_pos,
+                        "y_pos": y_pos,
+                        "scale": scale,
+                        "rotation": rotation
+                    })
+                    
+                    # Click-to-position functionality
+                    st.markdown("**Click on Preview to Position Logo**")
+                    click_position = st.text_input("Click Position (X, Y)", "", key=f"click_pos_{media_key}", disabled=True)
+                
+                with col_preview:
+                    preview_bytes = generate_preview_image(
+                        media_file,
+                        logo_path,
+                        custom_position=(x_pos, y_pos),
+                        scale=scale,
+                        rotation=rotation
+                    )
+                    if preview_bytes:
+                        st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
+                        
+                        # JavaScript for click-to-position
+                        js_code = f"""
+                        <script>
+                        function updatePosition_{media_key.replace('.', '_')}(event) {{
+                            const img = event.target;
+                            const rect = img.getBoundingClientRect();
+                            const x = event.clientX - rect.left;
+                            const y = event.clientY - rect.top;
+                            const scaleX = 1000 / rect.width;
+                            const scaleY = 1000 / rect.height;
+                            const scaledX = Math.round(x * scaleX);
+                            const scaledY = Math.round(y * scaleY);
+                            document.getElementById('click_pos_{media_key.replace('.', '_')}').value = `(${scaledX}, ${scaledY})`;
+                            // Update sliders
+                            window.Streamlit.setComponentValue('x_pos_{media_key.replace('.', '_')}', scaledX);
+                            window.Streamlit.setComponentValue('y_pos_{media_key.replace('.', '_')}', scaledY);
+                        }}
+                        </script>
+                        <img src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
+                             onclick="updatePosition_{media_key.replace('.', '_')}(event)"
+                             style="cursor: crosshair; max-width: 100%;">
+                        """
+                        st.markdown(js_code, unsafe_allow_html=True)
+                    else:
+                        st.warning(f"Failed to generate preview for {media_key}. Please check file formats or try again.")
+                        position_option = "Center"
+                        break
+                
+                custom_positions[media_key] = {
+                    "position": (x_pos, y_pos),
                     "scale": scale,
                     "rotation": rotation
-                })
-                
-                # Click-to-position functionality
-                st.markdown("**Click on Preview to Position Logo**")
-                click_position = st.text_input("Click Position (X, Y)", "", key=f"click_pos_{media_key}", disabled=True)
-                
-            with col_preview:
-                preview_bytes = generate_preview_image(
-                    media_file,
-                    logo_path,
-                    custom_position=(x_pos, y_pos),
-                    scale=scale,
-                    rotation=rotation
-                )
-                if preview_bytes:
-                    st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
-                    
-                    # JavaScript for click-to-position
-                    js_code = f"""
-                    <script>
-                    function updatePosition_{media_key.replace('.', '_')}(event) {{
-                        const img = event.target;
-                        const rect = img.getBoundingClientRect();
-                        const x = event.clientX - rect.left;
-                        const y = event.clientY - rect.top;
-                        const scaleX = 1000 / rect.width;
-                        const scaleY = 1000 / rect.height;
-                        const scaledX = Math.round(x * scaleX);
-                        const scaledY = Math.round(y * scaleY);
-                        document.getElementById('click_pos_{media_key.replace('.', '_')}').value = `(${scaledX}, ${scaledY})`;
-                        // Update sliders
-                        window.Streamlit.setComponentValue('x_pos_{media_key.replace('.', '_')}', scaledX);
-                        window.Streamlit.setComponentValue('y_pos_{media_key.replace('.', '_')}', scaledY);
-                    }}
-                    </script>
-                    <img src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
-                         onclick="updatePosition_{media_key.replace('.', '_')}(event)"
-                         style="cursor: crosshair; max-width: 100%;">
-                    """
-                    st.markdown(js_code, unsafe_allow_html=True)
-                else:
-                    st.warning(f"Failed to generate preview for {media_key}. Please check file formats or try again.")
-                    position_option = "Center"
-                    break
-                
-            custom_positions[media_key] = {
-                "position": (x_pos, y_pos),
-                "scale": scale,
-                "rotation": rotation
-            }
+                }
         
         if position_option == "Center":
             st.info("Reverted to Center position due to preview generation failure.")
