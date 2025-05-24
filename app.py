@@ -1045,8 +1045,8 @@ def debug_license_limits(admin_user_id):
     elif target_user_id:
         st.warning("Firestore unavailable. Debug tools limited.")
 
+
 # Streamlit app
-d# Streamlit app
 def main():
     st.set_page_config(page_title="Logo Adder App", layout="wide")
     st.title("Logo Adder App")
