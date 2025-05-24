@@ -1003,6 +1003,14 @@ def debug_license_limits(admin_user_id):
 
 # Streamlit app
 def main():
+    hide_streamlit_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            </style>
+            """
+    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
     st.title("Logo Adder App")
     st.markdown("""
         <style>
