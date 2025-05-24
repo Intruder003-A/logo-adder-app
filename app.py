@@ -1173,7 +1173,11 @@ def main():
     # Logo position selection
     st.header("Logo Position")
     position_options = ["Center", "Top", "Bottom", "Left", "Right", "Top Left", "Top Right", "Left Center", "Right Center", "Left Bottom", "Right Bottom"]
-    st.session_state.manual_positioning = st.checkbox("Enable Manual Logo Positioning", value=st.session_state.manual_positioning, key="manual_positioning")
+    # Use a separate variable to capture checkbox value to avoid direct session state assignment
+    manual_positioning = st.checkbox("Enable Manual Logo Positioning", value=st.session_state.manual_positioning, key="manual_positioning")
+    # Update session state explicitly
+    if manual_positioning != st.session_state.manual_positioning:
+        st.session_state.manual_positioning = manual_positioning
     
     # Preset position dropdown
     position_option = st.selectbox(
@@ -1314,11 +1318,15 @@ def main():
 
     # Face blurring option
     st.header("Face Blurring")
-    st.session_state.blur_enabled = st.checkbox(
+    blur_enabled = st.checkbox(
         "Enable Face Blurring",
         value=st.session_state.blur_enabled,
-        disabled=not State.blur_enabled or State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None
+        disabled=not State.blur_enabled or State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None,
+        key="blur_enabled"
     )
+    # Update session state explicitly
+    if blur_enabled != st.session_state.blur_enabled:
+        st.session_state.blur_enabled = blur_enabled
     if not State.blur_enabled:
         st.warning("Face blurring is disabled for your license.")
     elif State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None:
