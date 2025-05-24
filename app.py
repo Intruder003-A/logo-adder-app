@@ -1055,11 +1055,15 @@ def main():
     if 'patch_applied' not in st.session_state:
         st.session_state.patch_applied = False
     if 'blur_enabled' not in st.session_state:
-        st.session_state.blur_enabled = State.blur_enabled
+        st.session_state.blur_enabled = False  # Default to disabled
     if 'logo_positions' not in st.session_state:
         st.session_state.logo_positions = {}
+    if 'manual_positioning' not in st.session_state:
+        st.session_state.manual_positioning = False  # Default to disabled
+    if 'selected_position' not in st.session_state:
+        st.session_state.selected_position = "Center"  # Default position
     logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
-    logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}")
+    logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}, blur_enabled={st.session_state.blur_enabled}, manual_positioning={st.session_state.manual_positioning}")
 
     # Sidebar for login and patch application
     with st.sidebar:
@@ -1105,6 +1109,9 @@ def main():
                 st.session_state.user_id = None
                 st.session_state.patch_applied = False
                 st.session_state.logo_positions = {}
+                st.session_state.manual_positioning = False
+                st.session_state.blur_enabled = False
+                st.session_state.selected_position = "Center"
                 st.success("Logged out successfully.")
                 logging.info(f"User logged out: {st.session_state.user}")
 
@@ -1151,6 +1158,9 @@ def main():
             st.warning("Please apply a valid patch or ensure your license is active.")
         return
 
+    # Ensure directories exist
+    ensure_directories(Config.BASE_DIR)
+
     # Initialize AI models if not already done
     if State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None:
         initialize_ai_models()
@@ -1162,26 +1172,67 @@ def main():
 
     # Logo position selection
     st.header("Logo Position")
-    position_options = ["Manual", "Center", "Top", "Bottom", "Left", "Right", "Top Left", "Top Right", "Left Center", "Right Center", "Left Bottom", "Right Bottom"]
-    position_option = st.selectbox("Select Logo Position", position_options, index=0, key="logo_position_select")
-    custom_positions = {}
+    position_options = ["Center", "Top", "Bottom", "Left", "Right", "Top Left", "Top Right", "Left Center", "Right Center", "Left Bottom", "Right Bottom"]
+    st.session_state.manual_positioning = st.checkbox("Enable Manual Logo Positioning", value=st.session_state.manual_positioning, key="manual_positioning")
     
+    # Preset position dropdown
+    position_option = st.selectbox(
+        "Select Logo Position",
+        position_options,
+        index=position_options.index(st.session_state.selected_position),
+        key="logo_position_select"
+    )
+    st.session_state.selected_position = position_option
+    
+    # Quick position buttons
+    st.write("Quick Position Selectors:")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        if st.button("Top", key="quick_top"):
+            st.session_state.selected_position = "Top"
+            st.rerun()
+    with col2:
+        if st.button("Bottom", key="quick_bottom"):
+            st.session_state.selected_position = "Bottom"
+            st.rerun()
+    with col3:
+        if st.button("Left", key="quick_left"):
+            st.session_state.selected_position = "Left"
+            st.rerun()
+    with col4:
+        if st.button("Right", key="quick_right"):
+            st.session_state.selected_position = "Right"
+            st.rerun()
+    with col5:
+        if st.button("Center", key="quick_center"):
+            st.session_state.selected_position = "Center"
+            st.rerun()
+
     # Debug information
     st.write("**Debug Info**")
     st.write(f"- Selected Position: {position_option}")
+    st.write(f"- Manual Positioning Enabled: {st.session_state.manual_positioning}")
     st.write(f"- Logo File Uploaded: {'Yes' if logo_file else 'No'}")
     st.write(f"- Media Files Uploaded: {len(media_files) if media_files else 0}")
-    logging.info(f"Logo position selected: {position_option}, logo_file={bool(logo_file)}, media_files_count={len(media_files) if media_files else 0}")
+    logging.info(f"Logo position selected: {position_option}, manual_positioning={st.session_state.manual_positioning}, logo_file={bool(logo_file)}, media_files_count={len(media_files) if media_files else 0}")
 
-    if position_option == "Manual":
+    # Manual positioning controls
+    custom_positions = {}
+    if st.session_state.manual_positioning:
         st.subheader("Manual Logo Positioning")
         if not logo_file or not media_files:
             st.warning("Please upload both a logo and at least one media file to configure manual positioning.")
             logging.info("Manual positioning UI skipped: logo_file or media_files missing")
         else:
             logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
-            with open(logo_path, "wb") as f:
-                f.write(logo_file.getbuffer())
+            try:
+                with open(logo_path, "wb") as f:
+                    f.write(logo_file.getbuffer())
+                logging.info(f"Saved logo file to {logo_path}")
+            except Exception as e:
+                st.error(f"Failed to save logo file: {str(e)}")
+                logging.error(f"Error saving logo file to {logo_path}: {str(e)}\n{traceback.format_exc()}")
+                return
             
             for media_file in media_files:
                 media_key = media_file.name
@@ -1251,7 +1302,8 @@ def main():
                         st.markdown(js_code, unsafe_allow_html=True)
                     else:
                         st.warning(f"Failed to generate preview for {media_key}. Please check file formats or try again.")
-                        position_option = "Center"
+                        st.session_state.manual_positioning = False
+                        st.session_state.selected_position = "Center"
                         break
                 
                 custom_positions[media_key] = {
@@ -1259,13 +1311,14 @@ def main():
                     "scale": scale,
                     "rotation": rotation
                 }
-        
-        if position_option == "Center":
-            st.info("Reverted to Center position due to preview generation failure.")
 
     # Face blurring option
     st.header("Face Blurring")
-    st.session_state.blur_enabled = st.checkbox("Enable Face Blurring", value=State.blur_enabled, disabled=not State.blur_enabled)
+    st.session_state.blur_enabled = st.checkbox(
+        "Enable Face Blurring",
+        value=st.session_state.blur_enabled,
+        disabled=not State.blur_enabled or State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None
+    )
     if not State.blur_enabled:
         st.warning("Face blurring is disabled for your license.")
     elif State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None:
@@ -1275,16 +1328,27 @@ def main():
     # Process files
     if st.button("Process Files") and logo_file and media_files:
         if check_license(st.session_state.user_id):
-            ensure_directories(Config.BASE_DIR)
             logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
-            with open(logo_path, "wb") as f:
-                f.write(logo_file.getbuffer())
+            try:
+                with open(logo_path, "wb") as f:
+                    f.write(logo_file.getbuffer())
+                logging.info(f"Saved logo file to {logo_path}")
+            except Exception as e:
+                st.error(f"Failed to save logo file: {str(e)}")
+                logging.error(f"Error saving logo file to {logo_path}: {str(e)}\n{traceback.format_exc()}")
+                return
             output_files = []
 
             for media_file in media_files:
                 media_path = os.path.join(Config.BASE_DIR, "Media", media_file.name)
-                with open(media_path, "wb") as f:
-                    f.write(media_file.getbuffer())
+                try:
+                    with open(media_path, "wb") as f:
+                        f.write(media_file.getbuffer())
+                    logging.info(f"Saved media file to {media_path}")
+                except Exception as e:
+                    st.error(f"Failed to save media file {media_file.name}: {str(e)}")
+                    logging.error(f"Error saving media file to {media_path}: {str(e)}\n{traceback.format_exc()}")
+                    continue
                 output_filename = f"logoed_{media_file.name}"
                 output_path = os.path.join(Config.BASE_DIR, "Logoed_Media", output_filename)
                 media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
@@ -1296,85 +1360,98 @@ def main():
                     if media_type == "image" and st.session_state.blur_enabled:
                         image = Image.open(media_path).convert("RGBA")
                         processed_image, blurred_regions = process_image(image, State.dnn_net, st.session_state.blur_enabled)
+                        if blurred_regions:
+                            approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
+                            if not approved:
+                                st.error(f"Blurring not approved for {media_file.name}. Skipping processing.")
+                                logging.info(f"Blurring not approved for {media_file.name}")
+                                continue
                         processed_image.save(media_path, "PNG")
+                        logging.info(f"Applied face blurring to image {media_file.name}")
                     elif media_type == "video" and st.session_state.blur_enabled:
-                        blurred_regions = process_video(media_path, output_path, State.face_detector, State.face_mesh, State.yolo_model, State.tracker, st.session_state.blur_enabled)
-                        if not blurred_regions:
+                        blurred_regions = process_video(
+                            media_path,
+                            output_path,
+                            State.face_detector,
+                            State.face_mesh,
+                            State.yolo_model,
+                            State.tracker,
+                            st.session_state.blur_enabled
+                        )
+                        if blurred_regions:
+                            approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
+                            if not approved:
+                                st.error(f"Blurring not approved for {media_file.name}. Skipping processing.")
+                                logging.info(f"Blurring not approved for {media_file.name}")
+                                continue
+                        else:
                             shutil.copy(media_path, output_path)
-
-                    # Review blurred regions
-                    if st.session_state.blur_enabled and blurred_regions:
-                        approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
-                        if not approved:
-                            st.error(f"Processing aborted for {media_file.name} due to unapproved blur regions.")
-                            continue
+                        logging.info(f"Applied face blurring to video {media_file.name}")
 
                     # Overlay logo
-                    custom_position = custom_positions.get(media_key, {}).get("position")
-                    scale = custom_positions.get(media_key, {}).get("scale", 1.0)
-                    rotation = custom_positions.get(media_key, {}).get("rotation", 0)
+                    if st.session_state.manual_positioning and media_key in custom_positions:
+                        position_args = {
+                            "custom_position": custom_positions[media_key]["position"],
+                            "scale": custom_positions[media_key]["scale"],
+                            "rotation": custom_positions[media_key]["rotation"]
+                        }
+                        logging.info(f"Using manual position for {media_key}: {position_args}")
+                    else:
+                        position_args = {"position": position_option}
+                        logging.info(f"Using preset position for {media_key}: {position_option}")
+
                     if media_type == "image":
                         image = Image.open(media_path).convert("RGBA")
-                        output_image = overlay_logo_on_image(
-                            image,
-                            logo_path,
-                            position_option.lower().replace(" ", "_"),
-                            custom_position,
-                            scale,
-                            rotation
-                        )
-                        output_image.save(output_path, "PNG")
+                        final_image = overlay_logo_on_image(image, logo_path, **position_args)
+                        final_image.save(output_path, "PNG")
+                        logging.info(f"Overlayed logo on image {media_file.name} to {output_path}")
                     else:
-                        if not st.session_state.blur_enabled or not blurred_regions:
-                            overlay_logo_on_video(
-                                media_path,
-                                logo_path,
-                                output_path,
-                                position_option.lower().replace(" ", "_"),
-                                custom_position,
-                                scale,
-                                rotation
-                            )
-                        else:
-                            overlay_logo_on_video(
-                                output_path,
-                                logo_path,
-                                output_path,
-                                position_option.lower().replace(" ", "_"),
-                                custom_position,
-                                scale,
-                                rotation
-                            )
-
-                    # Increment execution count
-                    increment_execution(st.session_state.user_id, media_file.name)
+                        overlay_logo_on_video(media_path, logo_path, output_path, **position_args)
+                        logging.info(f"Overlayed logo on video {media_file.name} to {output_path}")
 
                     # Read output file for download
                     with open(output_path, "rb") as f:
-                        output_data = f.read()
-                    output_files.append((output_path, output_filename, output_data))
-                    st.success(f"Processed {media_file.name} successfully!")
-                    logging.info(f"Processed file: {media_file.name}, saved to {output_path}")
+                        file_data = f.read()
+                    output_files.append((output_path, output_filename, file_data))
+                    increment_execution(st.session_state.user_id, media_file.name)
+                    logging.info(f"Processed {media_file.name} successfully")
 
                 except Exception as e:
                     st.error(f"Error processing {media_file.name}: {str(e)}")
                     logging.error(f"Error processing {media_file.name}: {str(e)}\n{traceback.format_exc()}")
+                    continue
 
             # Provide download options
             if output_files:
                 st.header("Download Processed Files")
-                if Config.USE_JAVASCRIPT_DOWNLOAD:
-                    trigger_multiple_downloads(output_files)
+                if len(output_files) == 1:
+                    file_path, file_name, file_data = output_files[0]
+                    st.download_button(
+                        label=f"Download {file_name}",
+                        data=file_data,
+                        file_name=file_name,
+                        mime="image/png" if file_name.lower().endswith(".png") else "video/mp4"
+                    )
+                    logging.info(f"Provided single file download for {file_name}")
                 else:
-                    for file_path, file_name, file_data in output_files:
-                        st.download_button(
-                            label=f"Download {file_name}",
-                            data=file_data,
-                            file_name=file_name,
-                            mime="image/png" if file_name.lower().endswith(".png") else "video/mp4"
-                        )
+                    if Config.USE_JAVASCRIPT_DOWNLOAD:
+                        trigger_multiple_downloads(output_files)
+                    else:
+                        for file_path, file_name, file_data in output_files:
+                            st.download_button(
+                                label=f"Download {file_name}",
+                                data=file_data,
+                                file_name=file_name,
+                                mime="image/png" if file_name.lower().endswith(".png") else "video/mp4",
+                                key=f"download_{file_name}"
+                            )
+                    logging.info(f"Provided multiple file downloads for {len(output_files)} files")
+            else:
+                st.error("No files were processed successfully.")
+                logging.info("No files processed successfully")
         else:
             st.error("License check failed. Please apply a valid patch or contact support.")
+            logging.info("License check failed during processing")
 
 if __name__ == "__main__":
     main()
