@@ -1258,6 +1258,8 @@ def main():
             
             for media_file in media_files:
                 media_key = media_file.name
+                # Sanitize media_key for DOM ID
+                safe_media_key = ''.join(c if c.isalnum() else '_' for c in media_key).strip('_')
                 if media_key not in st.session_state.logo_positions:
                     st.session_state.logo_positions[media_key] = {
                         "x_pos": 500,
@@ -1271,10 +1273,10 @@ def main():
                 
                 with col_controls:
                     st.markdown("**Adjust Logo Settings**")
-                    x_pos = st.slider("X Position", 0, 1000, st.session_state.logo_positions[media_key]["x_pos"], key=f"x_pos_{media_key}")
-                    y_pos = st.slider("Y Position", 0, 1000, st.session_state.logo_positions[media_key]["y_pos"], key=f"y_pos_{media_key}")
-                    scale = st.slider("Scale", 0.5, 2.0, st.session_state.logo_positions[media_key]["scale"], step=0.1, key=f"scale_{media_key}")
-                    rotation = st.slider("Rotation (degrees)", -180, 180, st.session_state.logo_positions[media_key]["rotation"], step=1, key=f"rotation_{media_key}")
+                    x_pos = st.slider("X Position", 0, 1000, st.session_state.logo_positions[media_key]["x_pos"], key=f"x_pos_{safe_media_key}")
+                    y_pos = st.slider("Y Position", 0, 1000, st.session_state.logo_positions[media_key]["y_pos"], key=f"y_pos_{safe_media_key}")
+                    scale = st.slider("Scale", 0.5, 2.0, st.session_state.logo_positions[media_key]["scale"], step=0.1, key=f"scale_{safe_media_key}")
+                    rotation = st.slider("Rotation (degrees)", -180, 180, st.session_state.logo_positions[media_key]["rotation"], step=1, key=f"rotation_{safe_media_key}")
                     
                     # Update session state
                     st.session_state.logo_positions[media_key].update({
@@ -1286,7 +1288,7 @@ def main():
                     
                     # Click-to-position functionality
                     st.markdown("**Click on Preview to Position Logo**")
-                    click_position = st.text_input("Click Position (X, Y)", "", key=f"click_pos_{media_key}", disabled=True)
+                    click_position = st.text_input("Click Position (X, Y)", "", key=f"click_pos_{safe_media_key}", disabled=True)
                 
                 with col_preview:
                     preview_bytes = generate_preview_image(
@@ -1299,10 +1301,10 @@ def main():
                     if preview_bytes:
                         st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
                         
-                        # JavaScript for click-to-position
+                        # JavaScript for click-to-position with sanitized ID and existence check
                         js_code = f"""
                         <script>
-                        function updatePosition_{media_key.replace('.', '_')}(event) {{
+                        function updatePosition_{safe_media_key}(event) {{
                             const img = event.target;
                             const rect = img.getBoundingClientRect();
                             const x = event.clientX - rect.left;
@@ -1311,14 +1313,20 @@ def main():
                             const scaleY = 1000 / rect.height;
                             const scaledX = Math.round(x * scaleX);
                             const scaledY = Math.round(y * scaleY);
-                            document.getElementById('click_pos_{media_key.replace('.', '_')}').value = `(${scaledX}, ${scaledY})`;
-                            // Update sliders
-                            window.Streamlit.setComponentValue('x_pos_{media_key.replace('.', '_')}', scaledX);
-                            window.Streamlit.setComponentValue('y_pos_{media_key.replace('.', '_')}', scaledY);
+                            const input = document.querySelector('[data-click-pos="{safe_media_key}"]');
+                            if (input) {{
+                                input.value = `(${scaledX}, ${scaledY})`;
+                                // Update sliders via Streamlit
+                                window.Streamlit.setComponentValue('x_pos_{safe_media_key}', scaledX);
+                                window.Streamlit.setComponentValue('y_pos_{safe_media_key}', scaledY);
+                            }} else {{
+                                console.error('Input element for {safe_media_key} not found');
+                            }}
                         }}
                         </script>
                         <img src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
-                             onclick="updatePosition_{media_key.replace('.', '_')}(event)"
+                             onclick="updatePosition_{safe_media_key}(event)"
+                             data-click-pos="{safe_media_key}"
                              style="cursor: crosshair; max-width: 100%;">
                         """
                         st.markdown(js_code, unsafe_allow_html=True)
@@ -1466,5 +1474,6 @@ def main():
                         )
         else:
             st.error("Cannot process files due to license restrictions.")
+            
 if __name__ == "__main__":
     main()
