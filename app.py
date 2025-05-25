@@ -1143,7 +1143,7 @@ def main():
         st.session_state.patch_applied = False
         logging.info(f"Patch applied and license check passed for user {st.session_state.user_id}, cleared patch_applied flag")
 
-    if any(model is None for model in [State面膜detector, State.face_mesh, State.yolo_model, State.tracker, State.dnn_net]):
+    if any(model is None for model in [State.face_detector, State.face_mesh, State.yolo_model, State.tracker, State.dnn_net]):
         initialize_ai_models()
         if any(model is None for model in [State.face_detector, State.face_mesh, State.yolo_model, State.tracker, State.dnn_net]):
             st.warning("AI models failed to load. Blurring functionality disabled.")
