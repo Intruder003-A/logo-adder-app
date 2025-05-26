@@ -1070,37 +1070,6 @@ def debug_license_management(user_id):
         st.error(f"Error in debug: {str(e)}")
 
 
-# Streamlit app
-def main()import streamlit as st
-import os
-import uuid
-import logging
-import json
-import requests
-import base64
-import io
-import traceback
-from PIL import Image
-from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
-from datetime import datetime, timedelta, timezone
-from firebase_admin import auth
-from .config import Config
-from .state import State
-from .utils import (
-    ensure_directories,
-    initialize_ai_models,
-    generate_preview_image,
-    check_license,
-    verify_user,
-    validate_patch,
-    apply_patch,
-    overlay_logo_on_image,
-    overlay_logo_on_video,
-    process_image,
-    process_video,
-    review_blurred_regions,
-    increment_execution,
-)
 
 # Debug tool to manage license limits (admin only)
 def debug_license_limits(admin_user_id):
