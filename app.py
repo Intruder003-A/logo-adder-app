@@ -83,12 +83,16 @@ class Config:
 
 # State management
 class State:
-
-    current_media_index = 0
-    current_logo_index = 0
-    media_files = []
-    logo_paths = []
-    video_logo_paths = []
+    execution_count = 0
+    max_executions = Config.DEFAULT_MAX_EXECUTIONS
+    license_expiry = None
+    subscription_expiry = None
+    face_detector = None
+    face_mesh = None
+    yolo_model = None
+    tracker = None
+    dnn_net = None
+    infinite_count = False
     current_logo_pos = (0, 0)
     current_logo_scale = 1.0
     current_logo_angle = 0
@@ -96,13 +100,7 @@ class State:
     current_blur = 0
     blur_enabled = False
     remove_logo = False
-    dragging = False
-    drag_start = None
-    default_settings = None
-    use_default = False
-    history = []
-    history_index = -1
-
+    
 
 # Ensure directories exist
 def ensure_directories(base_path):
