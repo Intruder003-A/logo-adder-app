@@ -1,7 +1,7 @@
 import os
 import streamlit as st
 import firebase_admin
-from firebase_admin import credentials, firestore, auth
+from firebase_admin import credentials, firestore
 from PIL import Image
 import numpy as np
 from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
@@ -469,18 +469,24 @@ def logo_position_component(media_file, key_prefix="logo_position"):
         image = Image.open(media_file).convert("RGBA")
         img_buffer = io.BytesIO()
         image.save(img_buffer, format="PNG")
-        img_base64 = base64.b64encode(img_buffer.getbuffer()).decode('utf-8')
+        img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
         img_src = f"data:image/png;base64,{img_base64}"
 
+        # Initialize transparency in session state if not set
+        if 'logo_transparency' not in st.session_state:
+            st.session_state.logo_transparency = Config.LOGO_TRANSPARENCY
+
+        # Slider for transparency
         transparency = st.slider(
             "Logo Transparency (%)",
             min_value=0,
             max_value=100,
-            value=50,
+            value=int(st.session_state.logo_transparency * 100),
             step=1,
             key=f"{key_prefix}_transparency"
         )
-        st.session_state[f"{key_prefix}_transparency"] = transparency / 100.0
+        st.session_state.logo_transparency = transparency / 100.0
+        logging.info(f"Transparency set to {transparency}%")
 
         component_js = """
         <script>
@@ -504,7 +510,7 @@ def logo_position_component(media_file, key_prefix="logo_position"):
             }
         </script>
         <div>
-            <img src="%s" id="%s" onclick="updatePosition(event, '%s')" style="cursor: crosshair; max-width: 100%%;" />
+            <img src="%s" id="%s_image" onclick="updatePosition(event, '%s')" style="cursor: crosshair; max-width: 100%%;" />
             <p id="%s_display">Click image to set logo position</p>
         </div>
         """ % (img_src, key_prefix, key_prefix, key_prefix)
@@ -527,7 +533,7 @@ def overlay_logo_on_image(image, logo_path, position="center"):
         logo.thumbnail((max_logo_size, max_logo_size), Image.Resampling.LANCZOS)
         logo_array = np.array(logo)
 
-        transparency = st.session_state.get('logo_position_transparency', Config.LOGO_TRANSPARENCY)
+        transparency = st.session_state.get('logo_transparency', Config.LOGO_TRANSPARENCY)
         logo_array[:, :, 3] = (logo_array[:, :, 3] * transparency).astype(np.uint8)
         logo = Image.fromarray(logo_array)
         offset = int(min(img_width, img_height) * Config.LOGO_OFFSET_PERCENT)
@@ -575,7 +581,7 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
         logo.thumbnail((max_logo_size, max_logo_size), Image.Resampling.LANCZOS)
         logo_array = np.array(logo)
 
-        transparency = st.session_state.get('logo_position_transparency', Config.LOGO_TRANSPARENCY)
+        transparency = st.session_state.get('logo_transparency', Config.LOGO_TRANSPARENCY)
         logo_array[:, :, 3] = (logo_array[:, :, 3] * transparency).astype(np.uint8)
         logo = Image.fromarray(logo_array)
 
@@ -597,7 +603,7 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center")
                 "top_left": (offset, offset),
                 "top_right": (vid_width - logo.size[0] - offset, offset),
                 "left_center": (offset, (vid_height - logo.size[1]) // 2),
-                "right_center": (vid_width - logo.size[0] - offset, (vid_height - logo.size[1]) // 2),
+                "right_center": (vid_width - logoći[0] - offset, (vid_height - logo.size[1]) // 2),
                 "left_bottom": (offset, vid_height - logo.size[1] - offset),
                 "right_bottom": (vid_width - logo.size[0] - offset, vid_height - logo.size[1] - offset)
             }
@@ -665,14 +671,14 @@ def check_license(user_id, force_refresh=False):
         return False
     if db is None:
         logging.error("Firestore client not initialized. Using fallback count.")
-        st.warning("Firestore unavailable. Using local execution count (temporary).")
+        st.warning("Firestore unavailable. Using local execution count.")
         if not hasattr(st.session_state, 'local_execution_count'):
             st.session_state.local_execution_count = 0
         State.execution_count = st.session_state.local_execution_count
         State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
         State.infinite_count = False
         State.blur_enabled = True
-        State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+        State.execution_expiry = datetime.now(timezone.utc) + timedelta(days=30)
         State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
         if State.execution_count >= State.max_executions:
             logging.warning("Local execution limit reached.")
@@ -693,36 +699,36 @@ def check_license(user_id, force_refresh=False):
             State.max_executions = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
             State.infinite_count = data.get("infinite_count", False)
             State.blur_enabled = data.get("blur_enabled", True)
-            State.license_expiry = data.get("expiry", datetime.now(timezone.utc))
+            State.execution_expiry = data.get("expiry", datetime.now(timezone.utc))
             State.subscription_expiry = data.get("subscription_expiry", datetime.now(timezone.utc))
-            if State.license_expiry.tzinfo is None:
-                State.license_expiry = State.license_expiry.replace(tzinfo=timezone.utc)
+            if State.execution_expiry.tzinfo is None:
+                State.execution_expiry = State.execution_expiry.replace(tzinfo=timezone.utc)
             if State.subscription_expiry.tzinfo is None:
                 State.subscription_expiry = State.subscription_expiry.replace(tzinfo=timezone.utc)
-            logging.info(f"License checked for user {user_id}: count={State.execution_count}, max={State.max_executions}, infinite={State.infinite_count}, blur={State.blur_enabled}, expiry={State.license_expiry}, sub_expiry={State.subscription_expiry}")
+            logging.info(f"License checked for user {user_id}: count={State.execution_count}, max={State.max_executions}, infinite={State.infinite_count}, blur={State.blur_enabled}, expiry={State.execution_expiry}, sub_expiry={State.subscription_expiry}")
         else:
             State.execution_count = 0
             State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
             State.infinite_count = False
             State.blur_enabled = True
-            State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+            State.execution_expiry = datetime.now(timezone.utc) + timedelta(days=30)
             State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
             doc_ref.set({
                 "user_id": user_id,
                 "count": 0,
-                "max_executions": Config.DEFAULT_MAX_EXECUTIONS,
+                "max_executions": State.max_executions,
                 "infinite_count": False,
                 "blur_enabled": True,
-                "expiry": State.license_expiry,
+                "expiry": State.execution_expiry,
                 "subscription_expiry": State.subscription_expiry,
                 "created_at": datetime.now(timezone.utc)
             })
-            logging.info(f"New license created for user {user_id}: count={State.execution_count}, max={State.max_executions}, infinite={State.infinite_count}, blur={State.blur_enabled}, expiry={State.license_expiry}, sub_expiry={State.subscription_expiry}")
+            logging.info(f"New license created for user {user_id}: count={State.execution_count}, max={State.max_executions}, infinite={State.infinite_count}, blur_enabled={State.blur_enabled}, expiry={State.execution_expiry}, sub_expiry={State.subscription_expiry}")
 
         if State.infinite_count:
             logging.info(f"User {user_id} has infinite executions.")
             return True
-        if datetime.now(timezone.utc) > State.license_expiry:
+        if datetime.now(timezone.utc) > State.execution_expiry:
             logging.warning(f"License expired for user {user_id}.")
             st.error("License expired. Contact support for a new license.")
             return False
@@ -743,13 +749,13 @@ def check_license(user_id, force_refresh=False):
 # Increment execution count
 def increment_execution_count(user_id, file_name):
     if user_id == Config.ADMIN_USER_ID:
-        logging.info(f"Admin user {user_id} bypasses execution count increment for file {file_name}.")
+        logging.info(f"Admin user {user_id} bypasses execution count increment for {file_name}.")
         return
     if not user_id:
-        logging.warning(f"No user ID provided for execution count increment for {file_name}. Skipping.")
+        logging.error(f"No user ID provided for execution count increment for {file_name}.")
         return
     if db is None:
-        logging.warning(f"Firestore unavailable, using local count for {file_name}.")
+        logging.warning(f"Firestore unavailable, using local count for {file_name}")
         if not hasattr(st.session_state, 'local_execution_count'):
             st.session_state.local_execution_count = 0
         st.session_state.local_execution_count += 1
@@ -758,7 +764,7 @@ def increment_execution_count(user_id, file_name):
         return
 
     try:
-        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
+        doc_ref = db.collection(Config.EXECUTION_COUNT).document(user_id)
         doc = doc_ref.get()
         if doc.exists:
             data = doc.to_dict()
@@ -778,7 +784,7 @@ def increment_execution_count(user_id, file_name):
 
 # Apply patch (admin function)
 def apply_patch(user_id, new_count, days_valid, subscription_days, max_executions=None, blur_enabled=True):
-    if db is None:
+    if not db:
         logging.error("Firestore unavailable. Cannot apply patch.")
         st.error("Firestore unavailable. Cannot generate patch.")
         return None
@@ -792,7 +798,7 @@ def apply_patch(user_id, new_count, days_valid, subscription_days, max_execution
             max_executions = Config.DEFAULT_MAX_EXECUTIONS
         if max_executions > 0 and new_count > max_executions:
             logging.error(f"Invalid patch: new_count={new_count} > max={max_executions}")
-            st.error(f"Start count ({new_count}) cannot exceed max executions ({max_executions}).")
+            st.error(f"Start count {new_count} cannot exceed max executions {max_executions}.")
             return None
         doc_ref.set({
             "user_id": user_id,
@@ -804,9 +810,9 @@ def apply_patch(user_id, new_count, days_valid, subscription_days, max_execution
             "expiry": expiry,
             "subscription_expiry": subscription_expiry,
             "used": False,
-            "created": datetime.now(timezone.utc)
+            "created_at": datetime.now(timezone.utc)
         })
-        execution_limit = f"Infinite count" if infinite_count else f"max_executions={max_executions}"
+        execution_limit = f"infinite count" if infinite_count else f"max_executions={max_executions}"
         st.success(f"Patch generated: {patch_id} (Valid for {days_valid} days, Subscription valid for {subscription_days} days, Start count={new_count}, {execution_limit}, Blur enabled={blur_enabled})")
         logging.info(f"Patch generated: {patch_id}, for user {user_id}, count={new_count}, max={max_executions}, infinite={infinite_count}, blur_enabled={blur_enabled}, expiry={expiry}, subscription_expiry={subscription_expiry}")
         return patch_id
@@ -821,7 +827,7 @@ def validate_patch(patch_id, user_id):
         logging.info(f"Admin user {user_id} bypasses patch validation.")
         st.info("Admin users do not need to apply patches.")
         return True
-    if db is None:
+    if not db:
         logging.error("Firestore unavailable. Cannot validate patch.")
         st.error("Firestore unavailable. Cannot apply patch.")
         return False
@@ -867,7 +873,7 @@ def validate_patch(patch_id, user_id):
         State.max_executions = data.get("max_executions")
         State.infinite_count = data.get("infinite_count")
         State.blur_enabled = data.get("blur_enabled", True)
-        State.license_expiry = data.get("expiry")
+        State.execution_expiry = data.get("expiry")
         State.subscription_expiry = data.get("subscription_expiry")
         if hasattr(st.session_state, 'local_execution_count'):
             st.session_state.local_execution_count = data.get("new_count")
@@ -941,32 +947,31 @@ def verify_user(email, password):
         else:
             error_message = data.get("error", {}).get("message", "Invalid credentials")
             logging.error(f"Authentication failed: {error_message}")
-            st.error(f"Authentication failed: {error_message}")
             return None, error_message
     except Exception as e:
         logging.error(f"Error verifying user: {str(e)}")
         st.error(f"Error verifying credentials: {str(e)}")
         return None, str(e)
 
-# Debug tool to manage license limits
+# Debug tool to manage license
 def debug_license_management(user_id):
     if not user_id:
-        logging.warning("No user ID provided for debug license management.")
+        logging.warning("No user provided for debug license management.")
         st.error("No user ID provided for debug.")
         return
 
     st.subheader("Debug License Management")
-    st.write(f"Firestore status: {'Connected' if db else 'Disconnected'}")
+    st.write(f"Firestore Status: {'Connected' if db else 'Disconnected'}")
 
-    if db is None:
+    if not db:
         st.error("Firestore unavailable for debug mode.")
         return
 
-    target_user_id = st.text_input("Target User ID", value=user_id, key="debug_user_id")
-    if not target_user_id:
-        return
-
     try:
+        target_user_id = st.text_input("Target User ID", value=user_id, key="debug_user_id")
+        if not target_user_id:
+            return
+
         doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(target_user_id)
         doc = doc_ref.get()
         if doc.exists:
@@ -974,27 +979,27 @@ def debug_license_management(user_id):
             current_count = data.get("count", 0)
             current_max = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
             current_infinite = data.get("infinite_count", False)
-            current_blur = data.get("blur_enabled", True)
+            current_blur_enabled = data.get("blur_enabled", True)
             current_expiry = data.get("expiry", datetime.now(timezone.utc))
             current_sub_expiry = data.get("subscription_expiry", datetime.now(timezone.utc))
             if current_expiry.tzinfo is None:
                 current_expiry = current_expiry.replace(tzinfo=timezone.utc)
             if current_sub_expiry.tzinfo is None:
                 current_sub_expiry = current_sub_expiry.replace(tzinfo=timezone.utc)
-            st.write(f"Count: {current_count}")
+            st.write(f"Current Count: {current_count}")
             st.write(f"Max Executions: {current_max}")
             st.write(f"Infinite Count: {current_infinite}")
-            st.write(f"Blur Enabled: {current_blur}")
+            st.write(f"Blur Enabled: {current_blur_enabled}")
             st.write(f"Expiry: {current_expiry}")
             st.write(f"Subscription Expiry: {current_sub_expiry}")
         else:
-            st.warning(f"No license data for user {target_user_id}")
+            st.warning(f"No license data found for user {target_user_id}")
             current_count = 0
             current_max = Config.DEFAULT_MAX_EXECUTIONS
             current_infinite = False
-            current_blur = True
-            current_expiry = datetime.now(timezone.utc) + timedelta(days=30)
-            current_sub_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+            current_blur_enabled = True
+            current_expiry = datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
+            current_sub_expiry = datetime.now(timezone.utc).replace(tzinfo=timezone.utc) + timedelta(days=30)
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -1003,10 +1008,10 @@ def debug_license_management(user_id):
                 doc_ref.update({"count": new_count})
                 if target_user_id == user_id:
                     State.execution_count = new_count
-                st.success(f"Set count to {new_count}")
+                st.success(f"Count set to {new_count}")
                 logging.info(f"Debug: Set count to {new_count} for {target_user_id}")
 
-            new_max = st.number_input("Set Max", min_value=0, value=current_max, key="debug_max")
+            new_max = st.number_input("Set Max Executions", min_value=0, value=current_max, key="debug_max")
             if st.button("Apply Max", key="apply_max"):
                 if new_max > 0 and new_count > new_max:
                     st.error(f"Max executions ({new_max}) cannot be less than count ({new_count}).")
@@ -1018,28 +1023,28 @@ def debug_license_management(user_id):
                     if target_user_id == user_id:
                         State.max_executions = new_max
                         State.infinite_count = new_max == 0
-                    st.success(f"Set max executions to {new_max} ({'infinite' if new_max == 0 else 'limited'})")
+                    st.success(f"Max executions set to {new_max} ({'infinite' if new_max == 0 else 'limited'})")
                     logging.info(f"Debug: Set max to {new_max}, infinite={new_max == 0} for {target_user_id}")
         with col2:
-            expiry_days = st.number_input("Expiry Days", min_value=1, value=30, key="debug_expiry_days")
+            expiry_days = st.number_input("Expiry Days", min_value=1, value=30, key="debug_expiry")
             if st.button("Apply Expiry", key="apply_expiry"):
                 new_expiry = datetime.now(timezone.utc) + timedelta(days=expiry_days)
                 doc_ref.update({"expiry": new_expiry})
                 if target_user_id == user_id:
-                    State.license_expiry = new_expiry
+                    State.execution_expiry = new_expiry
                 st.success(f"Set expiry to {new_expiry}")
                 logging.info(f"Debug: Set expiry to {new_expiry} for {target_user_id}")
 
-            sub_days = st.number_input("Sub Days", min_value=1, value=30, key="debug_sub_days")
-            if st.button("Apply Sub Expiry", key="apply_sub_expiry"):
+            sub_days = st.number_input("Subscription Days", min_value=1, value=30, key="debug_sub")
+            if st.button("Apply Sub Expiry", key="apply_sub"):
                 new_sub_expiry = datetime.now(timezone.utc) + timedelta(days=sub_days)
                 doc_ref.update({"subscription_expiry": new_sub_expiry})
                 if target_user_id == user_id:
                     State.subscription_expiry = new_sub_expiry
                 st.success(f"Set subscription expiry to {new_sub_expiry}")
-                logging.info(f"Debug: Set sub_expiry to {new_sub_expiry} for {target_user_id}")
+                logging.info(f"Debug: Set subscription expiry to {new_sub_expiry} for {target_user_id}")
         with col3:
-            blur_enabled = st.checkbox("Enable Face Blur", value=current_blur, key="debug_blur")
+            blur_enabled = st.checkbox("Enable Blur", value=current_blur_enabled, key="debug_blur")
             if st.button("Apply Blur", key="apply_blur"):
                 doc_ref.update({"blur_enabled": blur_enabled})
                 if target_user_id == user_id:
@@ -1058,154 +1063,524 @@ def debug_license_management(user_id):
                     State.infinite_count = infinite
                     State.execution_count = 0 if infinite else current_count
                     State.max_executions = 0 if infinite else Config.DEFAULT_MAX_EXECUTIONS
-                st.success(f"Set infinite count to {infinite}")
+                st.success(f"Infinite count set to {infinite}")
                 logging.info(f"Debug: Set infinite={infinite}, count={0 if infinite else current_count}, max={0 if infinite else Config.DEFAULT_MAX_EXECUTIONS} for {target_user_id}")
     except Exception as e:
-        logging.error(f"Error in debug mode for {target_user_id}: {str(e)}\n{traceback.format_exc()}")
+        logging.error(f"Error in debug license management for {target_user_id}: {str(e)}\n{traceback.format_exc()}")
         st.error(f"Error in debug: {str(e)}")
-        
-# Main application
+
+
+# Streamlit app
 def main():
-    st.title("Logo Adder Application")
-    ensure_directories(Config.BASE_DIR)
-    initialize_ai_models()
+    st.set_page_config(page_title="Logo Adder App", layout="wide")
+    st.title("Logo Adder App")
 
+    # Initialize session state
+    if 'user' not in st.session_state:
+        st.session_state.user = None
     if 'user_id' not in st.session_state:
-        st.session_state['user_id'] = None
-        st.session_state['custom_position'] = None
-        st.session_state['local_execution_count'] = None
+        st.session_state.user_id = None
+    if 'device_id' not in st.session_state:
+        st.session_state.device_id = str(uuid.uuid4())
+    if 'patch_applied' not in st.session_state:
+        st.session_state.patch_applied = False
+    if 'blur_enabled' not in st.session_state:
+        st.session_state.blur_enabled = False
+    if 'logo_positions' not in st.session_state:
+        st.session_state.logo_positions = {}
+    if 'manual_positioning' not in st.session_state:
+        st.session_state.manual_positioning = False
+    if 'selected_position' not in st.session_state:
+        st.session_state.selected_position = "Center"
+    if 'auth_error' not in st.session_state:
+        st.session_state.auth_error = None
+    if 'reset_message' not in st.session_state:
+        st.session_state.reset_message = None
+    if 'output_files' not in st.session_state:
+        st.session_state.output_files = []
+    logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
+    logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}, blur_enabled={st.session_state.blur_enabled}, manual_positioning={st.session_state.manual_positioning}")
 
-    user_id = st.session_state.user_id
-    if not user_id:
-        st.subheader("Login")
-        email = st.text_input("Email Address", key="login_email")
-        password = st.text_input("Password", type="password", key="login_password")
-        if st.button("Login"):
-            user_id, error = verify_user(email, password)
-            if user_id:
-                st.session_state.user_id = user_id
-                st.success("Logged in successfully!")
-                logging.info(f"User {user_id} logged in")
-                st.rerun()
-            else:
-                st.error(f"Login failed: {error}")
-        st.subheader("Apply License Patch")
-        patch_id = st.text_input("Patch ID", key="patch_input")
-        if st.button("Apply Patch"):
-            if validate_patch(patch_id, user_id):
-                st.rerun()
-        return
-
-    if not check_license(user_id):
-        st.error("License check failed. Please apply a new patch or contact support.")
-        return
-
-    st.subheader("Upload Files")
-    logo_file = st.file_uploader("Upload Logo (PNG)", ["png", "jpg", "jpeg"], key="logo_upload")
-    media_files = st.file_uploader("Upload Media (JPEG, PNG, MP4)", ["jpg", "jpeg", "png", "mp4"], key="media_upload", accept_multiple_files=True)
-    blur_enabled = st.checkbox("Enable Face Blurring", value=True, key="blur_toggle")
-    position = st.selectbox("Logo Position", [
-        "top", "center", "bottom", "left", "right", "top_left",
-        "top_right", "left_center", "right_center", "left_bottom", "right_bottom"
-    ], key="position_select")
-    use_manual_position = st.checkbox("Manually Position Logo", False, key="manual_position")
-
-    if use_manual_position and media_files:
-        st.subheader("Set Logo Position")
-        media_file = media_files[0]
-        coords = logo_position_component(media_file, key_prefix="custom_position")
-        if coords and coords.get("value"):
-            st.session_state['custom_position'] = coords["value"]
-            st.write(f"Custom position set to: {st.session_state['custom_position']}")
-            logging.info(f"Custom position set: {st.session_state['custom_position']}")
-
-    if st.button("Process"):
-        if not logo_file or not media_files:
-            st.error("Please upload both a logo and at least one media file.")
-            return
-
-        logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
-        with open(logo_path, "wb") as f:
-            f.write(logo_file.getbuffer())
-
-        output_files = []
-        for media_file in media_files:
-            try:
-                media_path = os.path.join(Config.BASE_DIR, "Media", media_file.name)
-                with open(media_path, "wb") as f:
-                    f.write(media_file.getbuffer())
-
-                media_type = "image" if media_file.name.lower().endswith((".jpg", ".jpeg", ".png")) else "video"
-                output_name = f"logoed_{media_file.name}"
-                output_path = os.path.join(Config.BASE_DIR, "Logoed_Media", output_name)
-
-                blurred_regions = []
-                if blur_enabled and State.blur_enabled:
-                    if media_type == "image":
-                        image = Image.open(media_path).convert("RGBA")
-                        processed_image, blurred_regions = process_image(image, State.dnn_net, blur_enabled)
-                        processed_image.save(media_path, "PNG")
+    # Sidebar for login and patch application
+    with st.sidebar:
+        st.header("User Authentication")
+        if st.session_state.user is None:
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                if st.button("Login"):
+                    if not email or not password:
+                        st.session_state.auth_error = "Please enter both email and password."
+                        logging.error("Login attempted without email or password")
                     else:
-                        blurred_regions = process_video(media_path, output_path, State.face_detector, State.face_mesh, State.yolo_model, State.tracker, blur_enabled)
-
-                if blurred_regions:
-                    approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
-                    if not approved:
-                        st.warning(f"Processing aborted for {media_file.name} due to unapproved blur regions.")
-                        continue
-
-                if media_type == "image":
-                    image = Image.open(media_path).convert("RGBA")
-                    final_image = overlay_logo_on_image(image, logo_path, position=position)
-                    final_image.save(output_path, "PNG")
+                        user_id, error = verify_user(email, password)
+                        if user_id:
+                            st.session_state.user = email
+                            st.session_state.user_id = user_id
+                            st.session_state.auth_error = None
+                            st.session_state.reset_message = None
+                            st.success(f"Logged in as {email}")
+                            logging.info(f"User logged in: {email}, user_id={user_id}")
+                            if check_license(user_id):
+                                st.session_state.patch_applied = True
+                            else:
+                                st.session_state.patch_applied = False
+                            st.rerun()
+                        else:
+                            st.session_state.auth_error = error
+                            logging.error(f"Login failed for {email}: {error}")
+            with col2:
+                if st.button("Forgot Password?"):
+                    if not email:
+                        st.session_state.reset_message = "Please enter your email to reset the password."
+                        logging.error("Password reset attempted without email")
+                    else:
+                        try:
+                            auth.get_user_by_email(email)
+                            reset_link = auth.generate_password_reset_link(email)
+                            st.session_state.reset_message = f"Password reset link: {reset_link}"
+                            st.session_state.auth_error = None
+                            logging.info(f"Password reset link generated for {email}")
+                        except auth.UserNotFoundError:
+                            st.session_state.reset_message = "Email not registered."
+                            logging.error(f"Password reset failed: Email {email} not registered")
+                        except Exception as e:
+                            st.session_state.reset_message = f"Error generating reset link: {str(e)}"
+                            logging.error(f"Password reset error: {str(e)}")
+            if st.session_state.auth_error:
+                st.error(f"Login failed: {st.session_state.auth_error}")
+            if st.session_state.reset_message:
+                if "link" in st.session_state.reset_message:
+                    st.success(st.session_state.reset_message)
                 else:
-                    overlay_logo_on_video(media_path, logo_path, output_path, position=position)
+                    st.error(st.session_state.reset_message)
+        else:
+            st.write(f"Logged in as: {st.session_state.user}")
+            if st.button("Logout"):
+                st.session_state.user = None
+                st.session_state.user_id = None
+                st.session_state.patch_applied = False
+                st.session_state.logo_positions = {}
+                st.session_state.manual_positioning = False
+                st.session_state.blur_enabled = False
+                st.session_state.selected_position = "Center"
+                st.session_state.auth_error = None
+                st.session_state.reset_message = None
+                st.session_state.output_files = []
+                st.success("Logged out successfully.")
+                logging.info(f"User logged out: {st.session_state.user}")
+                st.rerun()
 
-                with open(output_path, "rb") as f:
-                    output_files.append((output_path, f.read()))
+            st.markdown("---")
+            st.header("Apply Patch")
+            patch_id = st.text_input("Enter Patch ID")
+            if st.button("Apply Patch"):
+                if not patch_id:
+                    st.error("Please enter a patch ID.")
+                else:
+                    if validate_patch(patch_id, st.session_state.user_id):
+                        st.session_state.patch_applied = True
+                        logging.info(f"Patch {patch_id} applied, forcing license refresh")
+                        check_license(st.session_state.user_id, force_refresh=True)
+                        st.rerun()
 
-                increment_execution_count(user_id, media_file.name)
-                st.success(f"Processed {media_file.name} successfully!")
-                logging.info(f"Processed {media_file.name} for user {user_id}, output={output_path}")
+        # Admin patch generation
+        if st.session_state.user_id == Config.ADMIN_USER_ID:
+            st.markdown("---")
+            st.header("Generate Patch (Admin)")
+            patch_user_id = st.text_input("Target User ID for Patch")
+            new_count = st.number_input("Start Execution Count", min_value=0, value=0)
+            days_valid = st.number_input("Patch Validity (Days)", min_value=1, value=30)
+            subscription_days_valid = st.number_input("Subscription Validity (Days)", min_value=1, value=30)
+            max_executions = st.number_input("Max Executions (0 for infinite)", min_value=0, value=Config.DEFAULT_MAX_EXECUTIONS)
+            blur_enabled = st.checkbox("Enable Face Blurring for Patch", value=True)
+            if st.button("Generate Patch"):
+                if not patch_user_id:
+                    st.error("Please provide a target user ID.")
+                else:
+                    patch_id = apply_patch(patch_user_id, new_count, days_valid, subscription_days_valid, max_executions, blur_enabled)
+                    if patch_id:
+                        st.session_state.patch_applied = True
+                        st.rerun()
 
+        # Admin debug tools
+        if st.session_state.user_id == Config.ADMIN_USER_ID:
+            st.markdown("---")
+            debug_license_limits(st.session_state.user_id)
+
+    # Main app logic
+    if st.session_state.user is None or not st.session_state.patch_applied:
+        if st.session_state.user is None:
+            st.warning("Please log in to use the app.")
+        elif not st.session_state.patch_applied:
+            st.warning("Please apply a valid patch or ensure your license is active.")
+        return
+
+    # Ensure directories exist
+    ensure_directories(Config.BASE_DIR)
+
+    # Initialize AI models if not already done
+    if not all([State.face_detector, State.face_mesh, State.yolo_model, State.tracker, State.dnn_net]):
+        initialize_ai_models()
+
+    # File upload section
+    st.header("Upload Files")
+    logo_file = st.file_uploader("Upload Logo (PNG with transparency recommended)", type=["png", "jpg", "jpeg"])
+    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4"], accept_multiple_files=True)
+
+    # Clear output_files when new media files are uploaded
+    if media_files and media_files != st.session_state.get('last_media_files', []):
+        st.session_state.output_files = []
+        st.session_state.last_media_files = media_files
+
+    # Logo position selection
+    st.header("Logo Position")
+    position_options = ["Center", "Top", "Bottom", "Left", "Right", "Top Left", "Top Right", "Left Center", "Right Center", "Left Bottom", "Right Bottom"]
+    manual_positioning = st.checkbox("Enable Manual Logo Positioning", value=st.session_state.manual_positioning, key="manual_positioning")
+    if manual_positioning != st.session_state.manual_positioning:
+        st.session_state.manual_positioning = manual_positioning
+
+    # Preset position dropdown
+    position_option = st.selectbox(
+        "Select Logo Position",
+        position_options,
+        index=position_options.index(st.session_state.selected_position),
+        key="logo_position_select"
+    )
+    st.session_state.selected_position = position_option
+
+    # Quick position buttons
+    st.write("Quick Position Selectors:")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        if st.button("Top", key="quick_top"):
+            st.session_state.selected_position = "Top"
+            st.rerun()
+    with col2:
+        if st.button("Bottom", key="quick_bottom"):
+            st.session_state.selected_position = "Bottom"
+            st.rerun()
+    with col3:
+        if st.button("Left", key="quick_left"):
+            st.session_state.selected_position = "Left"
+            st.rerun()
+    with col4:
+        if st.button("Right", key="quick_right"):
+            st.session_state.selected_position = "Right"
+            st.rerun()
+    with col5:
+        if st.button("Center", key="quick_center"):
+            st.session_state.selected_position = "Center"
+            st.rerun()
+
+    # Debug information
+    st.write("**Debug Info**")
+    st.write(f"- Selected Position: {position_option}")
+    st.write(f"- Manual Positioning Enabled: {st.session_state.manual_positioning}")
+    st.write(f"- Logo File Uploaded: {'Yes' if logo_file else 'No'}")
+    st.write(f"- Media Files Uploaded: {len(media_files) if media_files else 0}")
+    logging.info(f"Logo position selected: {position_option}, manual_positioning={st.session_state.manual_positioning}, logo_file={bool(logo_file)}, media_files_count={len(media_files) if media_files else 0}")
+
+    # Manual positioning controls
+    custom_positions = {}
+    if st.session_state.manual_positioning:
+        st.subheader("Manual Logo Positioning")
+        if not logo_file or not media_files:
+            st.warning("Please upload both a logo and at least one media file to configure manual positioning.")
+            logging.info("Manual positioning UI skipped: logo_file or media_files missing")
+        else:
+            logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
+            try:
+                with open(logo_path, "wb") as f:
+                    f.write(logo_file.getbuffer())
+                logging.info(f"Saved logo file to {logo_path}")
             except Exception as e:
-                logging.error(f"Error processing {media_file.name}: {str(e)}\n{traceback.format_exc()}")
-                st.error(f"Error processing {media_file.name}: {str(e)}")
+                st.error(f"Failed to save logo file: {str(e)}")
+                logging.error(f"Error saving logo file to {logo_path}: {str(e)}\n{traceback.format_exc()}")
+                return
 
-        if output_files:
-            if Config.USE_JAVASCRIPT_DOWNLOAD:
-                trigger_multiple_downloads(output_files)
-            else:
-                for file_path, file_data in output_files:
-                    st.download_button(
-                        f"Download {os.path.basename(file_path)}",
-                        file_data,
-                        file_name=os.path.basename(file_path)
+            for media_file in media_files:
+                media_key = media_file.name
+                # Sanitize media_key for DOM ID
+                safe_media_key = ''.join(c if c.isalnum() else '_' for c in media_key).strip('_')
+                if media_key not in st.session_state.logo_positions:
+                    st.session_state.logo_positions[media_key] = {
+                        "x_pos": 500,
+                        "y_pos": 500,
+                        "scale": 1.0,
+                        "rotation": 0
+                    }
+
+                st.markdown(f"### Positioning for {media_key}")
+                col_preview, col_controls = st.columns([3, 2])
+
+                with col_controls:
+                    st.markdown("**Adjust Logo Settings**")
+                    def update_position():
+                        logging.info(f"Slider updated for {media_key}: x_pos={st.session_state.logo_positions[media_key]['x_pos']}, y_pos={st.session_state.logo_positions[media_key]['y_pos']}")
+                        st.rerun()
+
+                    x_pos = st.slider(
+                        "X Position",
+                        0,
+                        1000,
+                        st.session_state.logo_positions[media_key]["x_pos"],
+                        key=f"x_pos_{safe_media_key}",
+                        on_change=update_position
+                    )
+                    y_pos = st.slider(
+                        "Y Position",
+                        0,
+                        1000,
+                        st.session_state.logo_positions[media_key]["y_pos"],
+                        key=f"y_pos_{safe_media_key}",
+                        on_change=update_position
+                    )
+                    scale = st.slider(
+                        "Scale",
+                        0.5,
+                        2.0,
+                        st.session_state.logo_positions[media_key]["scale"],
+                        step=0.1,
+                        key=f"scale_{safe_media_key}",
+                        on_change=update_position
+                    )
+                    rotation = st.slider(
+                        "Rotation (degrees)",
+                        -180,
+                        180,
+                        st.session_state.logo_positions[media_key]["rotation"],
+                        step=1,
+                        key=f"rotation_{safe_media_key}",
+                        on_change=update_position
                     )
 
-    if user_id == Config.ADMIN_USER_ID:
-        st.subheader("Admin - Generate Patch")
-        target_user_id = st.text_input("Target User ID", key="admin_user_id")
-        new_count = st.number_input("New Execution Count", min_value=0, value=0, key="admin_count")
-        days_valid = st.number_input("Days Valid", min_value=1, value=30, key="admin_days")
-        subscription_days = st.number_input("Subscription Days Valid", min_value=1, value=30, key="admin_sub_days")
-        max_executions = st.number_input("Max Executions", min_value=0, value=Config.DEFAULT_MAX_EXECUTIONS, key="admin_max")
-        blur_enabled_admin = st.checkbox("Enable Blur", value=True, key="admin_blur")
-        if st.button("Generate Patch"):
-            patch_id = apply_patch(
-                target_user_id,
-                new_count,
-                days_valid,
-                subscription_days,
-                max_executions,
-                blur_enabled_admin
-            )
-            if patch_id:
-                st.success(f"Patch ID: {patch_id}")
-                logging.info(f"Admin {user_id} generated patch {patch_id} for {target_user_id}")
+                    # Update session state
+                    st.session_state.logo_positions[media_key].update({
+                        "x_pos": x_pos,
+                        "y_pos": y_pos,
+                        "scale": scale,
+                        "rotation": rotation
+                    })
 
-        st.subheader("Admin - Debug License")
-        debug_license_management(user_id)
+                    # Click-to-position and drag functionality
+                    st.markdown("**Click or Drag Logo to Position**")
+                    click_position = st.text_input("Click/Drag Position (X, Y)", "", key=f"click_pos_{safe_media_key}", disabled=True)
+
+                with col_preview:
+                    # Generate preview with debug logging
+                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}")
+                    preview_bytes = generate_preview_image(
+                        media_file,
+                        logo_path,
+                        custom_position=(x_pos, y_pos),
+                        scale=scale,
+                        rotation=rotation
+                    )
+                    if preview_bytes:
+                        st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
+
+                        # JavaScript for click-to-position and drag with debouncing
+                        js_code = f"""
+                        <script>
+                        let isDragging_{safe_media_key} = false;
+                        let lastUpdateTime_{safe_media_key} = 0;
+                        const debounceDelay_{safe_media_key} = 100; // ms
+
+                        function startDrag_{safe_media_key}(event) {{
+                            event.preventDefault();
+                            isDragging_{safe_media_key} = true;
+                            updatePosition_{safe_media_key}(event);
+                        }}
+
+                        function drag_{safe_media_key}(event) {{
+                            if (isDragging_{safe_media_key}) {{
+                                const now = Date.now();
+                                if (now - lastUpdateTime_{safe_media_key} > debounceDelay_{safe_media_key}) {{
+                                    updatePosition_{safe_media_key}(event);
+                                    lastUpdateTime_{safe_media_key} = now;
+                                }}
+                            }}
+                        }}
+
+                        function stopDrag_{safe_media_key}() {{
+                            isDragging_{safe_media_key} = false;
+                        }}
+
+                        function updatePosition_{safe_media_key}(event) {{
+                            const img = document.getElementById('preview_{safe_media_key}');
+                            const rect = img.getBoundingClientRect();
+                            const x = event.clientX - rect.left;
+                            const y = event.clientY - rect.top;
+                            const scaleX = 1000 / rect.width;
+                            const scaleY = 1000 / rect.height;
+                            const scaledX = Math.round(Math.max(0, Math.min(1000, x * scaleX)));
+                            const scaledY = Math.round(Math.max(0, Math.min(1000, y * scaleY)));
+                            const input = document.querySelector('[data-click-pos="{safe_media_key}"]');
+                            if (input) {{
+                                input.value = '(' + scaledX + ', ' + scaledY + ')';
+                                window.Streamlit.setComponentValue('x_pos_{safe_media_key}', scaledX);
+                                window.Streamlit.setComponentValue('y_pos_{safe_media_key}', scaledY);
+                            }} else {{
+                                console.error('Input element for {safe_media_key} not found');
+                            }}
+                        }}
+
+                        // Ensure drag stops even if mouse leaves window
+                        document.addEventListener('mouseup', stopDrag_{safe_media_key});
+                        </script>
+                        <img id="preview_{safe_media_key}" 
+                             src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
+                             onmousedown="startDrag_{safe_media_key}(event)"
+                             onmousemove="drag_{safe_media_key}(event)"
+                             onmouseup="stopDrag_{safe_media_key}()"
+                             data-click-pos="{safe_media_key}"
+                             style="cursor: move; max-width: 100%;">
+                        """
+                        st.markdown(js_code, unsafe_allow_html=True)
+                    else:
+                        st.warning(f"Failed to generate preview for {media_key}. Please check file formats or try again.")
+                        st.session_state.manual_positioning = False
+                        st.session_state.selected_position = "Center"
+                        break
+
+                custom_positions[media_key] = {
+                    "position": (x_pos, y_pos),
+                    "scale": scale,
+                    "rotation": rotation
+                }
+
+    # Face blurring option
+    st.header("Face Blurring")
+    blur_enabled = st.checkbox(
+        "Enable Face Blurring",
+        value=st.session_state.blur_enabled,
+        disabled=not State.blur_enabled or State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None,
+        key="blur_enabled"
+    )
+    if blur_enabled != st.session_state.blur_enabled:
+        st.session_state.blur_enabled = blur_enabled
+    if not State.blur_enabled:
+        st.warning("Face blurring is disabled for your license.")
+    elif State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None:
+        st.warning("AI models not loaded. Face blurring is disabled.")
+        st.session_state.blur_enabled = False
+
+    # Process files
+    if st.button("Process Files") and logo_file and media_files:
+        # Clear output_files before processing new files
+        st.session_state.output_files = []
+
+        if check_license(st.session_state.user_id):
+            logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
+            try:
+                with open(logo_path, "wb") as f:
+                    f.write(logo_file.getbuffer())
+                logging.info(f"Saved logo file to {logo_path}")
+            except Exception as e:
+                st.error(f"Failed to save logo file: {str(e)}")
+                logging.error(f"Error saving logo file to {logo_path}: {str(e)}\n{traceback.format_exc()}")
+                return
+
+            for media_file in media_files:
+                media_path = os.path.join(Config.BASE_DIR, "Media", media_file.name)
+                try:
+                    with open(media_path, "wb") as f:
+                        f.write(media_file.getbuffer())
+                    logging.info(f"Saved media file to {media_path}")
+                except Exception as e:
+                    st.error(f"Failed to save media file {media_file.name}: {str(e)}")
+                    logging.error(f"Error saving media file to {media_path}: {str(e)}\n{traceback.format_exc()}")
+                    continue
+                output_filename = f"logoed_{media_file.name}"
+                output_path = os.path.join(Config.BASE_DIR, "Logoed_Media", output_filename)
+                media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
+                media_key = media_file.name
+
+                try:
+                    # Apply face blurring
+                    blurred_regions = []
+                    if media_type == "image" and st.session_state.blur_enabled:
+                        image = Image.open(media_path).convert("RGBA")
+                        processed_image, blurred_regions = process_image(image, State.dnn_net, st.session_state.blur_enabled)
+                        if blurred_regions:
+                            approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
+                            if not approved:
+                                st.error(f"Blurring not approved for {media_file.name}. Skipping processing.")
+                                logging.info(f"Blurring not approved for {media_file.name}")
+                                continue
+                        processed_image.save(media_path, "PNG")
+                        logging.info(f"Applied face blurring to image {media_file.name}")
+                    elif media_type == "video" and st.session_state.blur_enabled:
+                        blurred_regions = process_video(
+                            media_path,
+                            output_path,
+                            State.face_detector,
+                            State.face_mesh,
+                            State.yolo_model,
+                            State.tracker,
+                            st.session_state.blur_enabled
+                        )
+                        if blurred_regions:
+                            approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
+                            if not approved:
+                                st.error(f"Blurring not approved for {media_file.name}. Skipping processing.")
+                                logging.info(f"Blurring not approved for {media_file.name}")
+                                continue
+                        logging.info(f"Applied face blurring to video {media_file.name}")
+
+                    # Apply logo
+                    position = st.session_state.selected_position
+                    custom_position = custom_positions.get(media_key, {}).get("position")
+                    scale = custom_positions.get(media_key, {}).get("scale", 1.0)
+                    rotation = custom_positions.get(media_key, {}).get("rotation", 0)
+
+                    if media_type == "image":
+                        image = Image.open(media_path).convert("RGBA")
+                        processed_image = overlay_logo_on_image(
+                            image,
+                            logo_path,
+                            position=position,
+                            custom_position=custom_position,
+                            scale=scale,
+                            rotation=rotation
+                        )
+                        processed_image.save(output_path, "PNG")
+                        logging.info(f"Processed image saved to {output_path}")
+                    else:
+                        overlay_logo_on_video(
+                            media_path,
+                            logo_path,
+                            output_path,
+                            position=position,
+                            custom_position=custom_position,
+                            scale=scale,
+                            rotation=rotation
+                        )
+                        logging.info(f"Processed video saved to {output_path}")
+
+                    # Read output file for download
+                    with open(output_path, "rb") as f:
+                        output_data = f.read()
+                    st.session_state.output_files.append((output_path, output_filename, output_data))
+                    increment_execution(st.session_state.user_id, media_file.name)
+                    st.success(f"Processed {media_file.name} successfully!")
+                except Exception as e:
+                    st.error(f"Error processing {media_file.name}: {str(e)}")
+                    logging.error(f"Error processing {media_file.name}: {str(e)}\n{traceback.format_exc()}")
+
+    # Display download buttons for processed files
+    if st.session_state.output_files:
+        st.header("Download Processed Files")
+        for file_path, file_name, file_data in st.session_state.output_files:
+            st.download_button(
+                label=f"Download {file_name}",
+                data=file_data,
+                file_name=file_name,
+                mime="image/png" if file_name.lower().endswith((".jpg", "jpeg", "png")) else "video/mp4",
+                key=f"download_{file_name}"
+            )
 
 if __name__ == "__main__":
     main()
