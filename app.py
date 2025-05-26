@@ -1073,7 +1073,6 @@ def debug_license_management(user_id):
 
 # Debug tool to manage license limits (admin only)
 # Debug tool to manage license limits (admin only)
-# Debug tool to manage license limits (admin only)
 def debug_license_limits(admin_user_id):
     if not admin_user_id:
         st.error("No user_id for debug license limits.")
@@ -1358,7 +1357,7 @@ def main():
     # File upload section
     st.header("Upload Files")
     logo_file = st.file_uploader("Upload Logo (PNG with transparency recommended)", type=["png", "jpg", "jpeg"])
-    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True)
+    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4"], accept_multiple_files=True)
 
     # Clear output_files when new media files are uploaded
     if media_files and media_files != st.session_state.get('last_media_files', []):
@@ -1421,6 +1420,7 @@ def main():
             st.warning("Please upload both a logo and at least one media file to configure manual positioning.")
             logging.info("Manual positioning UI skipped: logo_file or media_files missing")
         else:
+            st.warning("Note: Manual positioning (X, Y coordinates) may not reflect in the preview but will apply during processing.")
             logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
             try:
                 with open(logo_path, "wb") as f:
@@ -1504,9 +1504,7 @@ def main():
                     logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}")
                     preview_bytes = generate_preview_image(
                         media_file,
-                        logo_path,
-                        scale=scale,
-                        rotation=rotation
+                        logo_path
                     )
                     if preview_bytes:
                         st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
