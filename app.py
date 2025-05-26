@@ -87,20 +87,13 @@ class State:
     max_executions = Config.DEFAULT_MAX_EXECUTIONS
     license_expiry = None
     subscription_expiry = None
+    blur_enabled = True
     face_detector = None
     face_mesh = None
     yolo_model = None
     tracker = None
     dnn_net = None
     infinite_count = False
-    current_logo_pos = (0, 0)
-    current_logo_scale = 1.0
-    current_logo_angle = 0
-    current_transparency = 1.0
-    current_blur = 0
-    blur_enabled = False
-    remove_logo = False
-    
 
 # Ensure directories exist
 def ensure_directories(base_path):
@@ -1206,8 +1199,142 @@ def debug_license_limits(admin_user_id):
     elif target_user_id:
         st.warning("Firestore unavailable. Debug tools limited.")
 
+# Stub for increment_execution
+def increment_execution(user_id, filename):
+    logging.info(f"Execution incremented for user {user_id} on file {filename}")
+    # Replace with actual Firestore update if available
+    pass
+
+# Debug tool to manage license limits (admin only)
+def debug_license_limits(admin_user_id):
+    if not admin_user_id:
+        st.error("No user_id for debug license limits.")
+        return
+    st.subheader("Debug License Limits")
+    st.write(f"Firestore Status: {'Connected' if db is not None else 'Disconnected'}")
+    target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
+    if target_user_id and db is not None:
+        try:
+            doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(target_user_id)
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict()
+                current_count = data.get("count", 0)
+                current_max = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
+                current_infinite = data.get("infinite_count", False)
+                current_blur_enabled = data.get("blur_enabled", True)
+                current_expiry = data.get("expiry", datetime.now(timezone.utc))
+                current_sub_expiry = data.get("subscription_expiry", datetime.now(timezone.utc))
+                if current_expiry.tzinfo is None:
+                    current_expiry = current_expiry.replace(tzinfo=timezone.utc)
+                if current_sub_expiry.tzinfo is None:
+                    current_sub_expiry = current_sub_expiry.replace(tzinfo=timezone.utc)
+                st.write(f"Current Count: {current_count}")
+                st.write(f"Current Max Executions: {current_max}")
+                st.write(f"Infinite Count Enabled: {current_infinite}")
+                st.write(f"Blur Enabled: {current_blur_enabled}")
+                st.write(f"Current License Expiry: {current_expiry}")
+                st.write(f"Current Subscription Expiry: {current_sub_expiry}")
+            else:
+                st.warning(f"No license found for user {target_user_id}.")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                custom_count = st.number_input("Set Custom Execution Count", min_value=0, value=current_count, key="custom_count")
+                if st.button("Apply Custom Count", key="apply_custom_count"):
+                    doc_ref.update({"count": custom_count})
+                    State.execution_count = custom_count if target_user_id == admin_user_id else State.execution_count
+                    st.success(f"Execution count set to {custom_count}. Reload to continue.")
+                    logging.info(f"Debug: Set execution count to {custom_count} for user {target_user_id}")
+                custom_max = st.number_input("Set Custom Max Executions", min_value=0, value=current_max, key="custom_max_executions")
+                if st.button("Apply Custom Max Executions", key="apply_custom_max"):
+                    if custom_max > 0 and custom_max < current_count:
+                        st.error(f"Max Executions ({custom_max}) cannot be less than Current Count ({current_count}).")
+                        logging.error(f"Invalid max_executions: {custom_max} < count={current_count} for user {target_user_id}")
+                    else:
+                        doc_ref.update({
+                            "max_executions": custom_max,
+                            "infinite_count": custom_max == 0
+                        })
+                        if target_user_id == admin_user_id:
+                            State.max_executions = custom_max
+                            State.infinite_count = custom_max == 0
+                        st.success(f"Max executions set to {custom_max}{' (infinite)' if custom_max == 0 else ''}. Reload to continue.")
+                        logging.info(f"Debug: Set max_executions to {custom_max}, infinite_count={custom_max == 0} for user {target_user_id}")
+            with col2:
+                expiry_days = st.number_input("Set License Expiry Days", min_value=1, value=30, key="expiry_days")
+                if st.button("Apply Expiry Days", key="apply_expiry_days"):
+                    new_expiry = datetime.now(timezone.utc) + timedelta(days=expiry_days)
+                    doc_ref.update({"expiry": new_expiry})
+                    if target_user_id == admin_user_id:
+                        State.license_expiry = new_expiry
+                    st.success(f"License expiry set to {new_expiry}. Reload to continue.")
+                    logging.info(f"Debug: Set license expiry to {new_expiry} for user {target_user_id}")
+            with col3:
+                sub_expiry_days = st.number_input("Set Subscription Expiry Days", min_value=1, value=30, key="sub_expiry_days")
+                if st.button("Apply Subscription Days", key="apply_sub_expiry_days"):
+                    new_sub_expiry = datetime.now(timezone.utc) + timedelta(days=sub_expiry_days)
+                    doc_ref.update({"subscription_expiry": new_sub_expiry})
+                    if target_user_id == admin_user_id:
+                        State.subscription_expiry = new_sub_expiry
+                    st.success(f"Subscription expiry set to {new_sub_expiry}. Reload to continue.")
+                    logging.info(f"Debug: Set subscription expiry to {new_sub_expiry} for user {target_user_id}")
+            with col4:
+                blur_enabled_toggle = st.checkbox("Enable Face Blurring", value=current_blur_enabled, key="blur_enabled_toggle")
+                if st.button("Apply Blur Setting", key="apply_blur_enabled"):
+                    doc_ref.update({"blur_enabled": blur_enabled_toggle})
+                    if target_user_id == admin_user_id:
+                        State.blur_enabled = blur_enabled_toggle
+                    st.success(f"Face blurring {'enabled' if blur_enabled_toggle else 'disabled'}. Reload to continue.")
+                    logging.info(f"Debug: Set blur_enabled to {blur_enabled_toggle} for user {target_user_id}")
+                infinite_count_toggle = st.checkbox("Enable Infinite Count", value=current_infinite, key="infinite_count_toggle")
+                if st.button("Apply Infinite Count", key="apply_infinite_count"):
+                    if infinite_count_toggle:
+                        doc_ref.update({"infinite_count": True, "count": 0, "max_executions": 0})
+                        if target_user_id == admin_user_id:
+                            State.infinite_count = True
+                            State.execution_count = 0
+                            State.max_executions = 0
+                        st.success("Infinite count enabled, count and max_executions set to 0.")
+                        logging.info(f"Debug: Enabled infinite count for user {target_user_id}")
+                    else:
+                        doc_ref.update({"infinite_count": False, "max_executions": Config.DEFAULT_MAX_EXECUTIONS})
+                        if target_user_id == admin_user_id:
+                            State.infinite_count = False
+                            State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+                        st.success(f"Infinite count disabled, max_executions set to {Config.DEFAULT_MAX_EXECUTIONS}.")
+                        logging.info(f"Debug: Disabled infinite count for user {target_user_id}")
+                if st.button("Reset Count to 0", key="reset_count"):
+                    doc_ref.update({"count": 0})
+                    State.execution_count = 0 if target_user_id == admin_user_id else State.execution_count
+                    st.success("Execution count reset to 0. Reload to continue.")
+                    logging.info(f"Debug: Reset execution count to 0 for user {target_user_id}")
+                if st.button("Set Expiry to Past", key="set_expiry_past"):
+                    past_expiry = datetime.now(timezone.utc) - timedelta(days=1)
+                    doc_ref.update({"expiry": past_expiry, "subscription_expiry": past_expiry})
+                    if target_user_id == admin_user_id:
+                        State.license_expiry = past_expiry
+                        State.subscription_expiry = past_expiry
+                    st.success("Expiry set to yesterday. Reload to test expiry.")
+                    logging.info(f"Debug: Set expiry to {past_expiry} for user {target_user_id}")
+                if st.button("Delete License", key="delete_license"):
+                    doc_ref.delete()
+                    if target_user_id == admin_user_id:
+                        State.execution_count = 0
+                        State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+                        State.infinite_count = False
+                        State.blur_enabled = True
+                        State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+                        State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+                    st.success("License deleted. Reload to recreate.")
+                    logging.info(f"Debug: Deleted license for user {target_user_id}")
+        except Exception as e:
+            logging.error(f"Error in debug license limits for user {target_user_id}: {str(e)}\n{traceback.format_exc()}")
+            st.error(f"Error accessing Firestore for user {target_user_id}: {str(e)}")
+    elif target_user_id:
+        st.warning("Firestore unavailable. Debug tools limited.")
+
 # Generate preview image for display
-def generate_preview_image(media_path, logo_path):
+def generate_preview_image(media_path, logo_path, scale=1.0):
     try:
         # Determine media type based on file extension
         media_type = "image" if os.path.basename(media_path).lower().endswith((".jpg", ".jpeg", ".png")) else "video"
@@ -1215,11 +1342,11 @@ def generate_preview_image(media_path, logo_path):
         if media_type == "image":
             # Load media image
             media_image = Image.open(media_path).convert("RGBA")
-            # Load logo
+            # Load logo with transparency
             logo_image = Image.open(logo_path).convert("RGBA")
-            # Resize logo for preview (e.g., 10% of media width)
+            # Resize logo for preview (base size: 10% of media width, adjusted by scale)
             media_width, media_height = media_image.size
-            logo_width = int(media_width * 0.1)
+            logo_width = int(media_width * 0.1 * scale)
             if logo_width > 0:
                 logo_ratio = logo_width / logo_image.size[0]
                 logo_height = int(logo_image.size[1] * logo_ratio)
@@ -1227,7 +1354,7 @@ def generate_preview_image(media_path, logo_path):
             # Place logo at center (default for preview)
             x = (media_width - logo_width) // 2
             y = (media_height - logo_height) // 2
-            # Composite images
+            # Composite images with transparency
             preview_image = Image.new("RGBA", media_image.size)
             preview_image.paste(media_image, (0, 0))
             preview_image.paste(logo_image, (x, y), logo_image)
@@ -1241,11 +1368,11 @@ def generate_preview_image(media_path, logo_path):
             # Get first frame
             frame = video.get_frame(0)
             media_image = Image.fromarray(frame).convert("RGBA")
-            # Load logo
+            # Load logo with transparency
             logo_image = Image.open(logo_path).convert("RGBA")
             # Resize logo for preview
             media_width, media_height = media_image.size
-            logo_width = int(media_width * 0.1)
+            logo_width = int(media_width * 0.1 * scale)
             if logo_width > 0:
                 logo_ratio = logo_width / logo_image.size[0]
                 logo_height = int(logo_image.size[1] * logo_ratio)
@@ -1253,7 +1380,7 @@ def generate_preview_image(media_path, logo_path):
             # Place logo at center
             x = (media_width - logo_width) // 2
             y = (media_height - logo_height) // 2
-            # Composite images
+            # Composite images with transparency
             preview_image = Image.new("RGBA", media_image.size)
             preview_image.paste(media_image, (0, 0))
             preview_image.paste(logo_image, (x, y), logo_image)
@@ -1486,7 +1613,7 @@ def main():
             st.warning("Please upload both a logo and at least one media file to configure manual positioning.")
             logging.info("Manual positioning UI skipped: logo_file or media_files missing")
         else:
-            st.warning("Note: Manual positioning (X, Y coordinates) may not reflect in the preview but will apply during processing.")
+            st.warning("Note: Manual positioning (X, Y, Scale) applies to previews but may not fully reflect in video output.")
             logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
             try:
                 with open(logo_path, "wb") as f:
@@ -1505,7 +1632,7 @@ def main():
                     st.session_state.logo_positions[media_key] = {
                         "x_pos": 500,
                         "y_pos": 500,
-                        "scale": 1.0,
+                        "scale": 2.0,  # Default to larger scale
                         "rotation": 0
                     }
 
@@ -1515,7 +1642,7 @@ def main():
                 with col_controls:
                     st.markdown("**Adjust Logo Settings**")
                     def update_position():
-                        logging.info(f"Slider updated for {media_key}: x_pos={st.session_state.logo_positions[media_key]['x_pos']}, y_pos={st.session_state.logo_positions[media_key]['y_pos']}")
+                        logging.info(f"Slider updated for {media_key}: x_pos={st.session_state.logo_positions[media_key]['x_pos']}, y_pos={st.session_state.logo_positions[media_key]['y_pos']}, scale={st.session_state.logo_positions[media_key]['scale']}")
                         st.rerun()
 
                     x_pos = st.slider(
@@ -1537,7 +1664,7 @@ def main():
                     scale = st.slider(
                         "Scale",
                         0.5,
-                        2.0,
+                        10.0,  # Increased range
                         st.session_state.logo_positions[media_key]["scale"],
                         step=0.1,
                         key=f"scale_{safe_media_key}",
@@ -1578,11 +1705,12 @@ def main():
                         continue
 
                     # Generate preview with debug logging
-                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}")
+                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}, scale={scale}")
                     try:
                         preview_bytes = generate_preview_image(
                             media_path,
-                            logo_path
+                            logo_path,
+                            scale=scale
                         )
                     except Exception as e:
                         st.warning(f"Failed to generate preview for {media_key}: {str(e)}. Skipping preview.")
@@ -1751,11 +1879,9 @@ def main():
                         processed_image = overlay_logo_on_image(
                             image,
                             logo_path,
-                            position=position,
-                            scale=custom_positions.get(media_key, {}).get("scale", 1.0),
-                            rotation=custom_positions.get(media_key, {}).get("rotation", 0)
+                            position=position
                         )
-                        processed_image.save(output_path, "PNG")
+                        processed_image.save(output_path, "PNG")  # Save as PNG for transparency
                         logging.info(f"Processed image saved to {output_path}")
                     else:
                         overlay_logo_on_video(
