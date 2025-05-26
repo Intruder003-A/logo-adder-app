@@ -1072,7 +1072,6 @@ def debug_license_management(user_id):
 
 
 # Debug tool to manage license limits (admin only)
-# Debug tool to manage license limits (admin only)
 def debug_license_limits(admin_user_id):
     if not admin_user_id:
         st.error("No user_id for debug license limits.")
@@ -1199,6 +1198,66 @@ def debug_license_limits(admin_user_id):
             st.error(f"Error accessing Firestore for user {target_user_id}: {str(e)}")
     elif target_user_id:
         st.warning("Firestore unavailable. Debug tools limited.")
+
+# Generate preview image for display
+def generate_preview_image(media_path, logo_path):
+    try:
+        # Determine media type based on file extension
+        media_type = "image" if os.path.basename(media_path).lower().endswith((".jpg", ".jpeg", ".png")) else "video"
+        
+        if media_type == "image":
+            # Load media image
+            media_image = Image.open(media_path).convert("RGBA")
+            # Load logo
+            logo_image = Image.open(logo_path).convert("RGBA")
+            # Resize logo for preview (e.g., 10% of media width)
+            media_width, media_height = media_image.size
+            logo_width = int(media_width * 0.1)
+            if logo_width > 0:
+                logo_ratio = logo_width / logo_image.size[0]
+                logo_height = int(logo_image.size[1] * logo_ratio)
+                logo_image = logo_image.resize((logo_width, logo_height), Image.LANCZOS)
+            # Place logo at center (default for preview)
+            x = (media_width - logo_width) // 2
+            y = (media_height - logo_height) // 2
+            # Composite images
+            preview_image = Image.new("RGBA", media_image.size)
+            preview_image.paste(media_image, (0, 0))
+            preview_image.paste(logo_image, (x, y), logo_image)
+            # Convert to bytes
+            output = io.BytesIO()
+            preview_image.convert("RGB").save(output, format="JPEG")
+            return output.getvalue()
+        else:
+            # Load video
+            video = VideoFileClip(media_path)
+            # Get first frame
+            frame = video.get_frame(0)
+            media_image = Image.fromarray(frame).convert("RGBA")
+            # Load logo
+            logo_image = Image.open(logo_path).convert("RGBA")
+            # Resize logo for preview
+            media_width, media_height = media_image.size
+            logo_width = int(media_width * 0.1)
+            if logo_width > 0:
+                logo_ratio = logo_width / logo_image.size[0]
+                logo_height = int(logo_image.size[1] * logo_ratio)
+                logo_image = logo_image.resize((logo_width, logo_height), Image.LANCZOS)
+            # Place logo at center
+            x = (media_width - logo_width) // 2
+            y = (media_height - logo_height) // 2
+            # Composite images
+            preview_image = Image.new("RGBA", media_image.size)
+            preview_image.paste(media_image, (0, 0))
+            preview_image.paste(logo_image, (x, y), logo_image)
+            # Convert to bytes
+            output = io.BytesIO()
+            preview_image.convert("RGB").save(output, format="JPEG")
+            video.close()
+            return output.getvalue()
+    except Exception as e:
+        logging.error(f"Error generating preview for {os.path.basename(media_path)}: {str(e)}\n{traceback.format_exc()}")
+        return None
 
 # Streamlit app
 def main():
@@ -1642,7 +1701,7 @@ def main():
                 if media_file.name.lower().endswith(".mov"):
                     output_filename = f"logoed_{os.path.splitext(media_file.name)[0]}.mov"
                 output_path = os.path.join(Config.BASE_DIR, "Logoed_Media", output_filename)
-                media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
+                media_type = "image" if media_file.name.lower().endswith((".jpg", ".jpeg", ".png")) else "video"
                 media_key = media_file.name
 
                 try:
@@ -1714,7 +1773,7 @@ def main():
     if st.session_state.output_files:
         st.header("Download Processed Files")
         for file_path, file_name, file_data in st.session_state.output_files:
-            mime_type = "image/png" if file_name.lower().endswith((".jpg", "jpeg", "png")) else "video/mp4"
+            mime_type = "image/png" if file_name.lower().endswith((".jpg", ".jpeg", ".png")) else "video/mp4"
             st.download_button(
                 label=f"Download {file_name}",
                 data=file_data,
