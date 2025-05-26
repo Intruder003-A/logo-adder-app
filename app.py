@@ -1073,6 +1073,7 @@ def debug_license_management(user_id):
 
 # Debug tool to manage license limits (admin only)
 # Debug tool to manage license limits (admin only)
+# Debug tool to manage license limits (admin only)
 def debug_license_limits(admin_user_id):
     if not admin_user_id:
         st.error("No user_id for debug license limits.")
@@ -1357,7 +1358,7 @@ def main():
     # File upload section
     st.header("Upload Files")
     logo_file = st.file_uploader("Upload Logo (PNG with transparency recommended)", type=["png", "jpg", "jpeg"])
-    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True)
+    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4"], accept_multiple_files=True)
 
     # Clear output_files when new media files are uploaded
     if media_files and media_files != st.session_state.get('last_media_files', []):
@@ -1504,7 +1505,6 @@ def main():
                     preview_bytes = generate_preview_image(
                         media_file,
                         logo_path,
-                        position=(x_pos, y_pos),
                         scale=scale,
                         rotation=rotation
                     )
@@ -1576,7 +1576,8 @@ def main():
                         break
 
                 custom_positions[media_key] = {
-                    "position": (x_pos, y_pos),
+                    "x_pos": x_pos,
+                    "y_pos": y_pos,
                     "scale": scale,
                     "rotation": rotation
                 }
@@ -1661,9 +1662,11 @@ def main():
                         logging.info(f"Applied face blurring to video {media_file.name}")
 
                     # Apply logo
-                    position = st.session_state.selected_position if not st.session_state.manual_positioning else custom_positions.get(media_key, {}).get("position", (500, 500))
+                    position = st.session_state.selected_position
                     scale = custom_positions.get(media_key, {}).get("scale", 1.0)
                     rotation = custom_positions.get(media_key, {}).get("rotation", 0)
+                    x_pos = custom_positions.get(media_key, {}).get("x_pos", 500)
+                    y_pos = custom_positions.get(media_key, {}).get("y_pos", 500)
 
                     if media_type == "image":
                         image = Image.open(media_path).convert("RGBA")
@@ -1683,7 +1686,9 @@ def main():
                             output_path,
                             position=position,
                             scale=scale,
-                            rotation=rotation
+                            rotation=rotation,
+                            x_pos=x_pos,
+                            y_pos=y_pos
                         )
                         logging.info(f"Processed video saved to {output_path}")
 
