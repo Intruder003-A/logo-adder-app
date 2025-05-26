@@ -1071,267 +1071,7 @@ def debug_license_management(user_id):
 
 
 
-# Debug tool to manage license limits (admin only)
-def debug_license_limits(admin_user_id):
-    if not admin_user_id:
-        st.error("No user_id for debug license limits.")
-        return
-    st.subheader("Debug License Limits")
-    st.write(f"Firestore Status: {'Connected' if db is not None else 'Disconnected'}")
-    target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
-    if target_user_id and db is not None:
-        try:
-            doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(target_user_id)
-            doc = doc_ref.get()
-            if doc.exists:
-                data = doc.to_dict()
-                current_count = data.get("count", 0)
-                current_max = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
-                current_infinite = data.get("infinite_count", False)
-                current_blur_enabled = data.get("blur_enabled", True)
-                current_expiry = data.get("expiry", datetime.now(timezone.utc))
-                current_sub_expiry = data.get("subscription_expiry", datetime.now(timezone.utc))
-                if current_expiry.tzinfo is None:
-                    current_expiry = current_expiry.replace(tzinfo=timezone.utc)
-                if current_sub_expiry.tzinfo is None:
-                    current_sub_expiry = current_sub_expiry.replace(tzinfo=timezone.utc)
-                st.write(f"Current Count: {current_count}")
-                st.write(f"Current Max Executions: {current_max}")
-                st.write(f"Infinite Count Enabled: {current_infinite}")
-                st.write(f"Blur Enabled: {current_blur_enabled}")
-                st.write(f"Current License Expiry: {current_expiry}")
-                st.write(f"Current Subscription Expiry: {current_sub_expiry}")
-            else:
-                st.warning(f"No license found for user {target_user_id}.")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                custom_count = st.number_input("Set Custom Execution Count", min_value=0, value=current_count, key="custom_count")
-                if st.button("Apply Custom Count", key="apply_custom_count"):
-                    doc_ref.update({"count": custom_count})
-                    State.execution_count = custom_count if target_user_id == admin_user_id else State.execution_count
-                    st.success(f"Execution count set to {custom_count}. Reload to continue.")
-                    logging.info(f"Debug: Set execution count to {custom_count} for user {target_user_id}")
-                custom_max = st.number_input("Set Custom Max Executions", min_value=0, value=current_max, key="custom_max_executions")
-                if st.button("Apply Custom Max Executions", key="apply_custom_max"):
-                    if custom_max > 0 and custom_max < current_count:
-                        st.error(f"Max Executions ({custom_max}) cannot be less than Current Count ({current_count}).")
-                        logging.error(f"Invalid max_executions: {custom_max} < count={current_count} for user {target_user_id}")
-                    else:
-                        doc_ref.update({
-                            "max_executions": custom_max,
-                            "infinite_count": custom_max == 0
-                        })
-                        if target_user_id == admin_user_id:
-                            State.max_executions = custom_max
-                            State.infinite_count = custom_max == 0
-                        st.success(f"Max executions set to {custom_max}{' (infinite)' if custom_max == 0 else ''}. Reload to continue.")
-                        logging.info(f"Debug: Set max_executions to {custom_max}, infinite_count={custom_max == 0} for user {target_user_id}")
-            with col2:
-                expiry_days = st.number_input("Set License Expiry Days", min_value=1, value=30, key="expiry_days")
-                if st.button("Apply Expiry Days", key="apply_expiry_days"):
-                    new_expiry = datetime.now(timezone.utc) + timedelta(days=expiry_days)
-                    doc_ref.update({"expiry": new_expiry})
-                    if target_user_id == admin_user_id:
-                        State.license_expiry = new_expiry
-                    st.success(f"License expiry set to {new_expiry}. Reload to continue.")
-                    logging.info(f"Debug: Set license expiry to {new_expiry} for user {target_user_id}")
-            with col3:
-                sub_expiry_days = st.number_input("Set Subscription Expiry Days", min_value=1, value=30, key="sub_expiry_days")
-                if st.button("Apply Subscription Days", key="apply_sub_expiry_days"):
-                    new_sub_expiry = datetime.now(timezone.utc) + timedelta(days=sub_expiry_days)
-                    doc_ref.update({"subscription_expiry": new_sub_expiry})
-                    if target_user_id == admin_user_id:
-                        State.subscription_expiry = new_sub_expiry
-                    st.success(f"Subscription expiry set to {new_sub_expiry}. Reload to continue.")
-                    logging.info(f"Debug: Set subscription expiry to {new_sub_expiry} for user {target_user_id}")
-            with col4:
-                blur_enabled_toggle = st.checkbox("Enable Face Blurring", value=current_blur_enabled, key="blur_enabled_toggle")
-                if st.button("Apply Blur Setting", key="apply_blur_enabled"):
-                    doc_ref.update({"blur_enabled": blur_enabled_toggle})
-                    if target_user_id == admin_user_id:
-                        State.blur_enabled = blur_enabled_toggle
-                    st.success(f"Face blurring {'enabled' if blur_enabled_toggle else 'disabled'}. Reload to continue.")
-                    logging.info(f"Debug: Set blur_enabled to {blur_enabled_toggle} for user {target_user_id}")
-                infinite_count_toggle = st.checkbox("Enable Infinite Count", value=current_infinite, key="infinite_count_toggle")
-                if st.button("Apply Infinite Count", key="apply_infinite_count"):
-                    if infinite_count_toggle:
-                        doc_ref.update({"infinite_count": True, "count": 0, "max_executions": 0})
-                        if target_user_id == admin_user_id:
-                            State.infinite_count = True
-                            State.execution_count = 0
-                            State.max_executions = 0
-                        st.success("Infinite count enabled, count and max_executions set to 0.")
-                        logging.info(f"Debug: Enabled infinite count for user {target_user_id}")
-                    else:
-                        doc_ref.update({"infinite_count": False, "max_executions": Config.DEFAULT_MAX_EXECUTIONS})
-                        if target_user_id == admin_user_id:
-                            State.infinite_count = False
-                            State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
-                        st.success(f"Infinite count disabled, max_executions set to {Config.DEFAULT_MAX_EXECUTIONS}.")
-                        logging.info(f"Debug: Disabled infinite count for user {target_user_id}")
-                if st.button("Reset Count to 0", key="reset_count"):
-                    doc_ref.update({"count": 0})
-                    State.execution_count = 0 if target_user_id == admin_user_id else State.execution_count
-                    st.success("Execution count reset to 0. Reload to continue.")
-                    logging.info(f"Debug: Reset execution count to 0 for user {target_user_id}")
-                if st.button("Set Expiry to Past", key="set_expiry_past"):
-                    past_expiry = datetime.now(timezone.utc) - timedelta(days=1)
-                    doc_ref.update({"expiry": past_expiry, "subscription_expiry": past_expiry})
-                    if target_user_id == admin_user_id:
-                        State.license_expiry = past_expiry
-                        State.subscription_expiry = past_expiry
-                    st.success("Expiry set to yesterday. Reload to test expiry.")
-                    logging.info(f"Debug: Set expiry to {past_expiry} for user {target_user_id}")
-                if st.button("Delete License", key="delete_license"):
-                    doc_ref.delete()
-                    if target_user_id == admin_user_id:
-                        State.execution_count = 0
-                        State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
-                        State.infinite_count = False
-                        State.blur_enabled = True
-                        State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
-                        State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
-                    st.success("License deleted. Reload to recreate.")
-                    logging.info(f"Debug: Deleted license for user {target_user_id}")
-        except Exception as e:
-            logging.error(f"Error in debug license limits for user {target_user_id}: {str(e)}\n{traceback.format_exc()}")
-            st.error(f"Error accessing Firestore for user {target_user_id}: {str(e)}")
-    elif target_user_id:
-        st.warning("Firestore unavailable. Debug tools limited.")
 
-# Stub for increment_execution
-def increment_execution(user_id, filename):
-    logging.info(f"Execution incremented for user {user_id} on file {filename}")
-    # Replace with actual Firestore update if available
-    pass
-
-# Debug tool to manage license limits (admin only)
-def debug_license_limits(admin_user_id):
-    if not admin_user_id:
-        st.error("No user_id for debug license limits.")
-        return
-    st.subheader("Debug License Limits")
-    st.write(f"Firestore Status: {'Connected' if db is not None else 'Disconnected'}")
-    target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
-    if target_user_id and db is not None:
-        try:
-            doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(target_user_id)
-            doc = doc_ref.get()
-            if doc.exists:
-                data = doc.to_dict()
-                current_count = data.get("count", 0)
-                current_max = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
-                current_infinite = data.get("infinite_count", False)
-                current_blur_enabled = data.get("blur_enabled", True)
-                current_expiry = data.get("expiry", datetime.now(timezone.utc))
-                current_sub_expiry = data.get("subscription_expiry", datetime.now(timezone.utc))
-                if current_expiry.tzinfo is None:
-                    current_expiry = current_expiry.replace(tzinfo=timezone.utc)
-                if current_sub_expiry.tzinfo is None:
-                    current_sub_expiry = current_sub_expiry.replace(tzinfo=timezone.utc)
-                st.write(f"Current Count: {current_count}")
-                st.write(f"Current Max Executions: {current_max}")
-                st.write(f"Infinite Count Enabled: {current_infinite}")
-                st.write(f"Blur Enabled: {current_blur_enabled}")
-                st.write(f"Current License Expiry: {current_expiry}")
-                st.write(f"Current Subscription Expiry: {current_sub_expiry}")
-            else:
-                st.warning(f"No license found for user {target_user_id}.")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                custom_count = st.number_input("Set Custom Execution Count", min_value=0, value=current_count, key="custom_count")
-                if st.button("Apply Custom Count", key="apply_custom_count"):
-                    doc_ref.update({"count": custom_count})
-                    State.execution_count = custom_count if target_user_id == admin_user_id else State.execution_count
-                    st.success(f"Execution count set to {custom_count}. Reload to continue.")
-                    logging.info(f"Debug: Set execution count to {custom_count} for user {target_user_id}")
-                custom_max = st.number_input("Set Custom Max Executions", min_value=0, value=current_max, key="custom_max_executions")
-                if st.button("Apply Custom Max Executions", key="apply_custom_max"):
-                    if custom_max > 0 and custom_max < current_count:
-                        st.error(f"Max Executions ({custom_max}) cannot be less than Current Count ({current_count}).")
-                        logging.error(f"Invalid max_executions: {custom_max} < count={current_count} for user {target_user_id}")
-                    else:
-                        doc_ref.update({
-                            "max_executions": custom_max,
-                            "infinite_count": custom_max == 0
-                        })
-                        if target_user_id == admin_user_id:
-                            State.max_executions = custom_max
-                            State.infinite_count = custom_max == 0
-                        st.success(f"Max executions set to {custom_max}{' (infinite)' if custom_max == 0 else ''}. Reload to continue.")
-                        logging.info(f"Debug: Set max_executions to {custom_max}, infinite_count={custom_max == 0} for user {target_user_id}")
-            with col2:
-                expiry_days = st.number_input("Set License Expiry Days", min_value=1, value=30, key="expiry_days")
-                if st.button("Apply Expiry Days", key="apply_expiry_days"):
-                    new_expiry = datetime.now(timezone.utc) + timedelta(days=expiry_days)
-                    doc_ref.update({"expiry": new_expiry})
-                    if target_user_id == admin_user_id:
-                        State.license_expiry = new_expiry
-                    st.success(f"License expiry set to {new_expiry}. Reload to continue.")
-                    logging.info(f"Debug: Set license expiry to {new_expiry} for user {target_user_id}")
-            with col3:
-                sub_expiry_days = st.number_input("Set Subscription Expiry Days", min_value=1, value=30, key="sub_expiry_days")
-                if st.button("Apply Subscription Days", key="apply_sub_expiry_days"):
-                    new_sub_expiry = datetime.now(timezone.utc) + timedelta(days=sub_expiry_days)
-                    doc_ref.update({"subscription_expiry": new_sub_expiry})
-                    if target_user_id == admin_user_id:
-                        State.subscription_expiry = new_sub_expiry
-                    st.success(f"Subscription expiry set to {new_sub_expiry}. Reload to continue.")
-                    logging.info(f"Debug: Set subscription expiry to {new_sub_expiry} for user {target_user_id}")
-            with col4:
-                blur_enabled_toggle = st.checkbox("Enable Face Blurring", value=current_blur_enabled, key="blur_enabled_toggle")
-                if st.button("Apply Blur Setting", key="apply_blur_enabled"):
-                    doc_ref.update({"blur_enabled": blur_enabled_toggle})
-                    if target_user_id == admin_user_id:
-                        State.blur_enabled = blur_enabled_toggle
-                    st.success(f"Face blurring {'enabled' if blur_enabled_toggle else 'disabled'}. Reload to continue.")
-                    logging.info(f"Debug: Set blur_enabled to {blur_enabled_toggle} for user {target_user_id}")
-                infinite_count_toggle = st.checkbox("Enable Infinite Count", value=current_infinite, key="infinite_count_toggle")
-                if st.button("Apply Infinite Count", key="apply_infinite_count"):
-                    if infinite_count_toggle:
-                        doc_ref.update({"infinite_count": True, "count": 0, "max_executions": 0})
-                        if target_user_id == admin_user_id:
-                            State.infinite_count = True
-                            State.execution_count = 0
-                            State.max_executions = 0
-                        st.success("Infinite count enabled, count and max_executions set to 0.")
-                        logging.info(f"Debug: Enabled infinite count for user {target_user_id}")
-                    else:
-                        doc_ref.update({"infinite_count": False, "max_executions": Config.DEFAULT_MAX_EXECUTIONS})
-                        if target_user_id == admin_user_id:
-                            State.infinite_count = False
-                            State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
-                        st.success(f"Infinite count disabled, max_executions set to {Config.DEFAULT_MAX_EXECUTIONS}.")
-                        logging.info(f"Debug: Disabled infinite count for user {target_user_id}")
-                if st.button("Reset Count to 0", key="reset_count"):
-                    doc_ref.update({"count": 0})
-                    State.execution_count = 0 if target_user_id == admin_user_id else State.execution_count
-                    st.success("Execution count reset to 0. Reload to continue.")
-                    logging.info(f"Debug: Reset execution count to 0 for user {target_user_id}")
-                if st.button("Set Expiry to Past", key="set_expiry_past"):
-                    past_expiry = datetime.now(timezone.utc) - timedelta(days=1)
-                    doc_ref.update({"expiry": past_expiry, "subscription_expiry": past_expiry})
-                    if target_user_id == admin_user_id:
-                        State.license_expiry = past_expiry
-                        State.subscription_expiry = past_expiry
-                    st.success("Expiry set to yesterday. Reload to test expiry.")
-                    logging.info(f"Debug: Set expiry to {past_expiry} for user {target_user_id}")
-                if st.button("Delete License", key="delete_license"):
-                    doc_ref.delete()
-                    if target_user_id == admin_user_id:
-                        State.execution_count = 0
-                        State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
-                        State.infinite_count = False
-                        State.blur_enabled = True
-                        State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
-                        State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
-                    st.success("License deleted. Reload to recreate.")
-                    logging.info(f"Debug: Deleted license for user {target_user_id}")
-        except Exception as e:
-            logging.error(f"Error in debug license limits for user {target_user_id}: {str(e)}\n{traceback.format_exc()}")
-            st.error(f"Error accessing Firestore for user {target_user_id}: {str(e)}")
-    elif target_user_id:
-        st.warning("Firestore unavailable. Debug tools limited.")
 
 # Stub for increment_execution
 def increment_execution(user_id, filename):
@@ -1468,16 +1208,22 @@ def debug_license_limits(admin_user_id):
         st.warning("Firestore unavailable. Debug tools limited.")
 
 # Generate preview image for display
-def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.0):
+def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.0, opacity=1.0):
     try:
         # Determine media type based on file extension
         media_type = "image" if os.path.basename(media_path).lower().endswith((".jpg", ".jpeg", ".png")) else "video"
         
-        # Check logo for transparency
+        # Load logo and check transparency
         logo_image = Image.open(logo_path).convert("RGBA")
         has_transparency = any(pixel[3] < 255 for pixel in logo_image.getdata())
         if not has_transparency:
             logging.warning(f"Logo {os.path.basename(logo_path)} has no transparent areas.")
+        
+        # Apply opacity to logo
+        if opacity < 1.0:
+            logo_data = logo_image.split()
+            alpha = logo_data[3].point(lambda x: x * opacity)
+            logo_image.putalpha(alpha)
         
         if media_type == "image":
             # Load media image
@@ -1749,11 +1495,11 @@ def main():
             st.warning("Please upload both a logo and at least one media file to configure manual positioning.")
             logging.info("Manual positioning UI skipped: logo_file or media_files missing")
         else:
-            st.warning("Note: Manual positioning (X, Y, Scale) applies to previews but may not fully reflect in video output.")
+            st.warning("Note: Manual positioning (X, Y, Scale, Opacity) applies to previews; video output may not reflect opacity or scale.")
             logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
             try:
                 with open(logo_path, "wb") as f:
-                    f.write(logo_file.getbuffer())
+                    f.write(logo_file.getvalue())
                 logging.info(f"Saved logo file to {logo_path}")
                 # Check logo transparency
                 logo_image = Image.open(logo_path).convert("RGBA")
@@ -1770,10 +1516,11 @@ def main():
                 safe_media_key = ''.join(c if c.isalnum() else '_' for c in media_key).strip('_')
                 if media_key not in st.session_state.logo_positions:
                     st.session_state.logo_positions[media_key] = {
-                        "x_pos": 500,
-                        "y_pos": 500,
-                        "scale": 2.0,  # Default to larger scale
-                        "rotation": 0
+                        "x_pos": 250,
+                        "y_pos": 250,
+                        "scale": 2.0,
+                        "rotation": 0,
+                        "opacity": 1.0
                     }
 
                 st.markdown(f"### Positioning for {media_key}")
@@ -1782,7 +1529,13 @@ def main():
                 with col_controls:
                     st.markdown("**Adjust Logo Settings**")
                     def update_position():
-                        logging.info(f"Slider updated for {media_key}: x_pos={st.session_state.logo_positions[media_key]['x_pos']}, y_pos={st.session_state.logo_positions[media_key]['y_pos']}, scale={st.session_state.logo_positions[media_key]['scale']}")
+                        logging.info(
+                            f"Slider updated for {media_key}: "
+                            f"x_pos={st.session_state.logo_positions[media_key]['x_pos']}, "
+                            f"y_pos={st.session_state.logo_positions[media_key]['y_pos']}, "
+                            f"scale={st.session_state.logo_positions[media_key]['scale']}, "
+                            f"opacity={st.session_state.logo_positions[media_key]['opacity']}"
+                        )
                         st.rerun()
 
                     x_pos = st.slider(
@@ -1819,13 +1572,23 @@ def main():
                         key=f"rotation_{safe_media_key}",
                         on_change=update_position
                     )
+                    opacity = st.slider(
+                        "Opacity (0.0 = transparent, 1.0 = opaque)",
+                        0.0,
+                        1.0,
+                        st.session_state.logo_positions[media_key]["opacity"],
+                        step=0.01,
+                        key=f"opacity_{safe_media_key}",
+                        on_change=update_position
+                    )
 
                     # Update session state
                     st.session_state.logo_positions[media_key].update({
                         "x_pos": x_pos,
                         "y_pos": y_pos,
                         "scale": scale,
-                        "rotation": rotation
+                        "rotation": rotation,
+                        "opacity": opacity
                     })
 
                     # Click-to-position and drag functionality
@@ -1837,7 +1600,7 @@ def main():
                     media_path = os.path.join(Config.BASE_DIR, "Media", media_file.name)
                     try:
                         with open(media_path, "wb") as f:
-                            f.write(media_file.getbuffer())
+                            f.write(media_file.getvalue())
                         logging.info(f"Saved media file to {media_path} for preview")
                     except Exception as e:
                         st.error(f"Failed to save media file {media_file.name} for preview: {str(e)}")
@@ -1845,14 +1608,15 @@ def main():
                         continue
 
                     # Generate preview with debug logging
-                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}, scale={scale}")
+                    logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}, scale={scale}, opacity={opacity}")
                     try:
                         preview_bytes = generate_preview_image(
                             media_path,
                             logo_path,
                             x_pos=x_pos,
                             y_pos=y_pos,
-                            scale=scale
+                            scale=scale,
+                            opacity=opacity
                         )
                     except Exception as e:
                         st.warning(f"Failed to generate preview for {media_key}: {str(e)}. Skipping preview.")
@@ -1912,51 +1676,53 @@ def main():
                         document.addEventListener('mouseup', stopDrag_{safe_media_key});
                         </script>
                         <img id="preview_{safe_media_key}" 
-                             src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
-                             onmousedown="startDrag_{safe_media_key}(event)"
-                             onmousemove="drag_{safe_media_key}(event)"
-                             onmouseup="stopDrag_{safe_media_key}()"
-                             data-click-pos="{safe_media_key}"
-                             style="cursor: move; max-width: 100%;">
+                            src="data:image/png;base64,{base64.b64encode(preview_bytes).decode('utf-8')}" 
+                            onmousedown="startDrag_{safe_media_key}(event)"
+                            onmousemove="drag_{safe_media_key}(event)"
+                            onmouseup="stopDrag_{safe_media_key}()"
+                            data-click-pos="{safe_media_key}"
+                            style="cursor: move; max-width: 100%;">
                         """
                         st.markdown(js_code, unsafe_allow_html=True)
                     else:
                         st.warning(f"Failed to generate preview for {media_key}. Please check file formats or try again.")
-                        logging.warning(f"Preview generation returned None for {media_key}")
+                        logging.warning(f"Preview generation failed for {media_key}")
 
-                custom_positions[media_key] = {
+                custom_positions.append({
+                    "media_key": media_key,
                     "x_pos": x_pos,
                     "y_pos": y_pos,
                     "scale": scale,
-                    "rotation": rotation
-                }
+                    "rotation": rotation,
+                    "opacity": opacity
+                })
 
     # Face blurring option
     st.header("Face Blurring")
     blur_enabled = st.checkbox(
         "Enable Face Blurring",
-        value=st.session_state.blur_enabled,
+        value=st.session_state.get('blur_enabled', False),
         disabled=not State.blur_enabled or State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None,
         key="blur_enabled"
     )
-    if blur_enabled != st.session_state.blur_enabled:
+    if blur_enabled != st.session_state.get('blur_enabled'):
         st.session_state.blur_enabled = blur_enabled
     if not State.blur_enabled:
         st.warning("Face blurring is disabled for your license.")
     elif State.face_detector is None or State.face_mesh is None or State.yolo_model is None or State.tracker is None or State.dnn_net is None:
-        st.warning("AI models not loaded. Face blurring is disabled.")
+        st.warning("AI models not loaded. Face blurring disabled.")
         st.session_state.blur_enabled = False
 
     # Process files
     if st.button("Process Files") and logo_file and media_files:
-        # Clear output_files before processing new files
-        st.session_state.output_files = []
+        # Clear output_files before processing
+        st.session_state.output_files.clear()
 
         if check_license(st.session_state.user_id):
             logo_path = os.path.join(Config.BASE_DIR, "Logos", logo_file.name)
             try:
                 with open(logo_path, "wb") as f:
-                    f.write(logo_file.getbuffer())
+                    f.write(logo_file.getvalue())
                 logging.info(f"Saved logo file to {logo_path}")
             except Exception as e:
                 st.error(f"Failed to save logo file: {str(e)}")
@@ -1967,14 +1733,13 @@ def main():
                 media_path = os.path.join(Config.BASE_DIR, "Media", media_file.name)
                 try:
                     with open(media_path, "wb") as f:
-                        f.write(media_file.getbuffer())
+                        f.write(media_file.getvalue())
                     logging.info(f"Saved media file to {media_path}")
                 except Exception as e:
                     st.error(f"Failed to save media file {media_file.name}: {str(e)}")
                     logging.error(f"Error saving media file to {media_path}: {str(e)}\n{traceback.format_exc()}")
                     continue
                 output_filename = f"logoed_{media_file.name}"
-                # Preserve .mov extension for MOV files
                 if media_file.name.lower().endswith(".mov"):
                     output_filename = f"logoed_{os.path.splitext(media_file.name)[0]}.mov"
                 output_path = os.path.join(Config.BASE_DIR, "Logoed_Media", output_filename)
@@ -1984,9 +1749,9 @@ def main():
                 try:
                     # Apply face blurring
                     blurred_regions = []
-                    if media_type == "image" and st.session_state.blur_enabled:
+                    if media_type == "image" and st.session_state.get('blur_enabled', False):
                         image = Image.open(media_path).convert("RGBA")
-                        processed_image, blurred_regions = process_image(image, State.dnn_net, st.session_state.blur_enabled)
+                        processed_image, blurred_regions = process_image(image, State.dnn_net, st.session_state.get('blur_enabled'))
                         if blurred_regions:
                             approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
                             if not approved:
@@ -1995,7 +1760,7 @@ def main():
                                 continue
                         processed_image.save(media_path, "PNG")
                         logging.info(f"Applied face blurring to image {media_file.name}")
-                    elif media_type == "video" and st.session_state.blur_enabled:
+                    elif media_type == "video" and st.session_state.get('blur_enabled', False):
                         blurred_regions = process_video(
                             media_path,
                             output_path,
@@ -2003,7 +1768,7 @@ def main():
                             State.face_mesh,
                             State.yolo_model,
                             State.tracker,
-                            st.session_state.blur_enabled
+                            st.session_state.get('blur_enabled')
                         )
                         if blurred_regions:
                             approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
@@ -2014,23 +1779,27 @@ def main():
                         logging.info(f"Applied face blurring to video {media_file.name}")
 
                     # Apply logo
-                    position = (custom_positions.get(media_key, {}).get("x_pos", 500), custom_positions.get(media_key, {}).get("y_pos", 500)) if st.session_state.manual_positioning else st.session_state.selected_position
+                    media_positions = next((p for p in custom_positions if p["media_key"] == media_key), {})
+                    position = (media_positions.get("x_pos", 500), media_positions.get("y_pos", 500)) if st.session_state.manual_positioning else st.session_state.selected_position
+                    opacity = media_positions.get("opacity", 1.0)
 
                     if media_type == "image":
                         image = Image.open(media_path).convert("RGBA")
                         processed_image = overlay_logo_on_image(
                             image,
                             logo_path,
-                            position=position
+                            position=position,
+                            opacity=opacity
                         )
-                        processed_image.save(output_path, "PNG")  # Save as PNG for transparency
+                        processed_image.save(output_path, "PNG")
                         logging.info(f"Processed image saved to {output_path}")
                     else:
                         overlay_logo_on_video(
                             media_path,
                             logo_path,
                             output_path,
-                            position=position
+                            position=position,
+                            opacity=opacity
                         )
                         logging.info(f"Processed video saved to {output_path}")
 
