@@ -1357,7 +1357,7 @@ def main():
     # File upload section
     st.header("Upload Files")
     logo_file = st.file_uploader("Upload Logo (PNG with transparency recommended)", type=["png", "jpg", "jpeg"])
-    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4"], accept_multiple_files=True)
+    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True)
 
     # Clear output_files when new media files are uploaded
     if media_files and media_files != st.session_state.get('last_media_files', []):
