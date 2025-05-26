@@ -83,9 +83,7 @@ class Config:
 
 # State management
 class State:
-    logos_folder = os.path.join(Config.SCRIPT_DIR, "Logos")
-    media_folder = os.path.join(Config.SCRIPT_DIR, "Media")
-    output_folder = os.path.join(Config.SCRIPT_DIR, "Logoed_Media")
+
     current_media_index = 0
     current_logo_index = 0
     media_files = []
