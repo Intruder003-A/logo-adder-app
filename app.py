@@ -1277,7 +1277,7 @@ def main():
                             logging.error(f"Password reset failed: Email {email} not registered")
                         except Exception as e:
                             st.session_state.reset_message = f"Error generating reset link: {str(e)}"
-                            logging.error(f"Password reset error: {str(e)}")
+                            logging.error(f"Error generating reset link: {str(e)}")
             if st.session_state.auth_error:
                 st.error(f"Login failed: {st.session_state.auth_error}")
             if st.session_state.reset_message:
@@ -1357,7 +1357,7 @@ def main():
     # File upload section
     st.header("Upload Files")
     logo_file = st.file_uploader("Upload Logo (PNG with transparency recommended)", type=["png", "jpg", "jpeg"])
-    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "mov", "png", "mp4"], accept_multiple_files=True)
+    media_files = st.file_uploader("Upload Media (Images or Videos)", type=["jpg", "jpeg", "png", "mp4", "mov"], accept_multiple_files=True)
 
     # Clear output_files when new media files are uploaded
     if media_files and media_files != st.session_state.get('last_media_files', []):
@@ -1500,12 +1500,29 @@ def main():
                     click_position = st.text_input("Click/Drag Position (X, Y)", "", key=f"click_pos_{safe_media_key}", disabled=True)
 
                 with col_preview:
+                    # Save media file to disk for preview
+                    media_path = os.path.join(Config.BASE_DIR, "Media", media_file.name)
+                    try:
+                        with open(media_path, "wb") as f:
+                            f.write(media_file.getbuffer())
+                        logging.info(f"Saved media file to {media_path} for preview")
+                    except Exception as e:
+                        st.error(f"Failed to save media file {media_file.name} for preview: {str(e)}")
+                        logging.error(f"Error saving media file to {media_path}: {str(e)}\n{traceback.format_exc()}")
+                        continue
+
                     # Generate preview with debug logging
                     logging.info(f"Generating preview for {media_key} with x_pos={x_pos}, y_pos={y_pos}")
-                    preview_bytes = generate_preview_image(
-                        media_file,
-                        logo_path
-                    )
+                    try:
+                        preview_bytes = generate_preview_image(
+                            media_path,
+                            logo_path
+                        )
+                    except Exception as e:
+                        st.warning(f"Failed to generate preview for {media_key}: {str(e)}. Skipping preview.")
+                        logging.error(f"Error generating preview for {media_key}: {str(e)}\n{traceback.format_exc()}")
+                        continue
+
                     if preview_bytes:
                         st.image(preview_bytes, caption=f"Preview for {media_key}", use_container_width=True)
 
@@ -1569,9 +1586,7 @@ def main():
                         st.markdown(js_code, unsafe_allow_html=True)
                     else:
                         st.warning(f"Failed to generate preview for {media_key}. Please check file formats or try again.")
-                        st.session_state.manual_positioning = False
-                        st.session_state.selected_position = "Center"
-                        break
+                        logging.warning(f"Preview generation returned None for {media_key}")
 
                 custom_positions[media_key] = {
                     "x_pos": x_pos,
@@ -1623,6 +1638,9 @@ def main():
                     logging.error(f"Error saving media file to {media_path}: {str(e)}\n{traceback.format_exc()}")
                     continue
                 output_filename = f"logoed_{media_file.name}"
+                # Preserve .mov extension for MOV files
+                if media_file.name.lower().endswith(".mov"):
+                    output_filename = f"logoed_{os.path.splitext(media_file.name)[0]}.mov"
                 output_path = os.path.join(Config.BASE_DIR, "Logoed_Media", output_filename)
                 media_type = "image" if media_file.name.lower().endswith((".jpg", "jpeg", "png")) else "video"
                 media_key = media_file.name
@@ -1660,11 +1678,7 @@ def main():
                         logging.info(f"Applied face blurring to video {media_file.name}")
 
                     # Apply logo
-                    position = st.session_state.selected_position
-                    scale = custom_positions.get(media_key, {}).get("scale", 1.0)
-                    rotation = custom_positions.get(media_key, {}).get("rotation", 0)
-                    x_pos = custom_positions.get(media_key, {}).get("x_pos", 500)
-                    y_pos = custom_positions.get(media_key, {}).get("y_pos", 500)
+                    position = (custom_positions.get(media_key, {}).get("x_pos", 500), custom_positions.get(media_key, {}).get("y_pos", 500)) if st.session_state.manual_positioning else st.session_state.selected_position
 
                     if media_type == "image":
                         image = Image.open(media_path).convert("RGBA")
@@ -1672,8 +1686,8 @@ def main():
                             image,
                             logo_path,
                             position=position,
-                            scale=scale,
-                            rotation=rotation
+                            scale=custom_positions.get(media_key, {}).get("scale", 1.0),
+                            rotation=custom_positions.get(media_key, {}).get("rotation", 0)
                         )
                         processed_image.save(output_path, "PNG")
                         logging.info(f"Processed image saved to {output_path}")
@@ -1682,11 +1696,7 @@ def main():
                             media_path,
                             logo_path,
                             output_path,
-                            position=position,
-                            scale=scale,
-                            rotation=rotation,
-                            x_pos=x_pos,
-                            y_pos=y_pos
+                            position=position
                         )
                         logging.info(f"Processed video saved to {output_path}")
 
@@ -1704,11 +1714,12 @@ def main():
     if st.session_state.output_files:
         st.header("Download Processed Files")
         for file_path, file_name, file_data in st.session_state.output_files:
+            mime_type = "image/png" if file_name.lower().endswith((".jpg", "jpeg", "png")) else "video/mp4"
             st.download_button(
                 label=f"Download {file_name}",
                 data=file_data,
                 file_name=file_name,
-                mime="image/png" if file_name.lower().endswith((".jpg", "jpeg", "png")) else "video/mp4",
+                mime=mime_type,
                 key=f"download_{file_name}"
             )
 
