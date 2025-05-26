@@ -1071,6 +1071,166 @@ def debug_license_management(user_id):
 
 
 # Streamlit app
+def main()import streamlit as st
+import os
+import uuid
+import logging
+import json
+import requests
+import base64
+import io
+import traceback
+from PIL import Image
+from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
+from datetime import datetime, timedelta, timezone
+from firebase_admin import auth
+from .config import Config
+from .state import State
+from .utils import (
+    ensure_directories,
+    initialize_ai_models,
+    generate_preview_image,
+    check_license,
+    verify_user,
+    validate_patch,
+    apply_patch,
+    overlay_logo_on_image,
+    overlay_logo_on_video,
+    process_image,
+    process_video,
+    review_blurred_regions,
+    increment_execution,
+)
+
+# Debug tool to manage license limits (admin only)
+def debug_license_limits(admin_user_id):
+    if not admin_user_id:
+        st.error("No user_id for debug license limits.")
+        return
+    st.subheader("Debug License Limits")
+    st.write(f"Firestore Status: {'Connected' if db is not None else 'Disconnected'}")
+    target_user_id = st.text_input("Enter Target User ID for Debug", key="debug_user_id")
+    if target_user_id and db is not None:
+        try:
+            doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(target_user_id)
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict()
+                current_count = data.get("count", 0)
+                current_max = data.get("max_executions", Config.DEFAULT_MAX_EXECUTIONS)
+                current_infinite = data.get("infinite_count", False)
+                current_blur_enabled = data.get("blur_enabled", True)
+                current_expiry = data.get("expiry", datetime.now(timezone.utc))
+                current_sub_expiry = data.get("subscription_expiry", datetime.now(timezone.utc))
+                if current_expiry.tzinfo is None:
+                    current_expiry = current_expiry.replace(tzinfo=timezone.utc)
+                if current_sub_expiry.tzinfo is None:
+                    current_sub_expiry = current_sub_expiry.replace(tzinfo=timezone.utc)
+                st.write(f"Current Count: {current_count}")
+                st.write(f"Current Max Executions: {current_max}")
+                st.write(f"Infinite Count Enabled: {current_infinite}")
+                st.write(f"Blur Enabled: {current_blur_enabled}")
+                st.write(f"Current License Expiry: {current_expiry}")
+                st.write(f"Current Subscription Expiry: {current_sub_expiry}")
+            else:
+                st.warning(f"No license found for user {target_user_id}.")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                custom_count = st.number_input("Set Custom Execution Count", min_value=0, value=current_count, key="custom_count")
+                if st.button("Apply Custom Count", key="apply_custom_count"):
+                    doc_ref.update({"count": custom_count})
+                    State.execution_count = custom_count if target_user_id == admin_user_id else State.execution_count
+                    st.success(f"Execution count set to {custom_count}. Reload to continue.")
+                    logging.info(f"Debug: Set execution count to {custom_count} for user {target_user_id}")
+                custom_max = st.number_input("Set Custom Max Executions", min_value=0, value=current_max, key="custom_max_executions")
+                if st.button("Apply Custom Max Executions", key="apply_custom_max"):
+                    if custom_max > 0 and custom_max < current_count:
+                        st.error(f"Max Executions ({custom_max}) cannot be less than Current Count ({current_count}).")
+                        logging.error(f"Invalid max_executions: {custom_max} < count={current_count} for user {target_user_id}")
+                    else:
+                        doc_ref.update({
+                            "max_executions": custom_max,
+                            "infinite_count": custom_max == 0
+                        })
+                        if target_user_id == admin_user_id:
+                            State.max_executions = custom_max
+                            State.infinite_count = custom_max == 0
+                        st.success(f"Max executions set to {custom_max}{' (infinite)' if custom_max == 0 else ''}. Reload to continue.")
+                        logging.info(f"Debug: Set max_executions to {custom_max}, infinite_count={custom_max == 0} for user {target_user_id}")
+            with col2:
+                expiry_days = st.number_input("Set License Expiry Days", min_value=1, value=30, key="expiry_days")
+                if st.button("Apply Expiry Days", key="apply_expiry_days"):
+                    new_expiry = datetime.now(timezone.utc) + timedelta(days=expiry_days)
+                    doc_ref.update({"expiry": new_expiry})
+                    if target_user_id == admin_user_id:
+                        State.license_expiry = new_expiry
+                    st.success(f"License expiry set to {new_expiry}. Reload to continue.")
+                    logging.info(f"Debug: Set license expiry to {new_expiry} for user {target_user_id}")
+            with col3:
+                sub_expiry_days = st.number_input("Set Subscription Expiry Days", min_value=1, value=30, key="sub_expiry_days")
+                if st.button("Apply Subscription Days", key="apply_sub_expiry_days"):
+                    new_sub_expiry = datetime.now(timezone.utc) + timedelta(days=sub_expiry_days)
+                    doc_ref.update({"subscription_expiry": new_sub_expiry})
+                    if target_user_id == admin_user_id:
+                        State.subscription_expiry = new_sub_expiry
+                    st.success(f"Subscription expiry set to {new_sub_expiry}. Reload to continue.")
+                    logging.info(f"Debug: Set subscription expiry to {new_sub_expiry} for user {target_user_id}")
+            with col4:
+                blur_enabled_toggle = st.checkbox("Enable Face Blurring", value=current_blur_enabled, key="blur_enabled_toggle")
+                if st.button("Apply Blur Setting", key="apply_blur_enabled"):
+                    doc_ref.update({"blur_enabled": blur_enabled_toggle})
+                    if target_user_id == admin_user_id:
+                        State.blur_enabled = blur_enabled_toggle
+                    st.success(f"Face blurring {'enabled' if blur_enabled_toggle else 'disabled'}. Reload to continue.")
+                    logging.info(f"Debug: Set blur_enabled to {blur_enabled_toggle} for user {target_user_id}")
+                infinite_count_toggle = st.checkbox("Enable Infinite Count", value=current_infinite, key="infinite_count_toggle")
+                if st.button("Apply Infinite Count", key="apply_infinite_count"):
+                    if infinite_count_toggle:
+                        doc_ref.update({"infinite_count": True, "count": 0, "max_executions": 0})
+                        if target_user_id == admin_user_id:
+                            State.infinite_count = True
+                            State.execution_count = 0
+                            State.max_executions = 0
+                        st.success("Infinite count enabled, count and max_executions set to 0.")
+                        logging.info(f"Debug: Enabled infinite count for user {target_user_id}")
+                    else:
+                        doc_ref.update({"infinite_count": False, "max_executions": Config.DEFAULT_MAX_EXECUTIONS})
+                        if target_user_id == admin_user_id:
+                            State.infinite_count = False
+                            State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+                        st.success(f"Infinite count disabled, max_executions set to {Config.DEFAULT_MAX_EXECUTIONS}.")
+                        logging.info(f"Debug: Disabled infinite count for user {target_user_id}")
+                if st.button("Reset Count to 0", key="reset_count"):
+                    doc_ref.update({"count": 0})
+                    State.execution_count = 0 if target_user_id == admin_user_id else State.execution_count
+                    st.success("Execution count reset to 0. Reload to continue.")
+                    logging.info(f"Debug: Reset execution count to 0 for user {target_user_id}")
+                if st.button("Set Expiry to Past", key="set_expiry_past"):
+                    past_expiry = datetime.now(timezone.utc) - timedelta(days=1)
+                    doc_ref.update({"expiry": past_expiry, "subscription_expiry": past_expiry})
+                    if target_user_id == admin_user_id:
+                        State.license_expiry = past_expiry
+                        State.subscription_expiry = past_expiry
+                    st.success("Expiry set to yesterday. Reload to test expiry.")
+                    logging.info(f"Debug: Set expiry to {past_expiry} for user {target_user_id}")
+                if st.button("Delete License", key="delete_license"):
+                    doc_ref.delete()
+                    if target_user_id == admin_user_id:
+                        State.execution_count = 0
+                        State.max_executions = Config.DEFAULT_MAX_EXECUTIONS
+                        State.infinite_count = False
+                        State.blur_enabled = True
+                        State.license_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+                        State.subscription_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+                    st.success("License deleted. Reload to recreate.")
+                    logging.info(f"Debug: Deleted license for user {target_user_id}")
+        except Exception as e:
+            logging.error(f"Error in debug license limits for user {target_user_id}: {str(e)}\n{traceback.format_exc()}")
+            st.error(f"Error accessing Firestore for user {target_user_id}: {str(e)}")
+    elif target_user_id:
+        st.warning("Firestore unavailable. Debug tools limited.")
+
+# Streamlit app
 def main():
     st.set_page_config(page_title="Logo Adder App", layout="wide")
     st.title("Logo Adder App")
