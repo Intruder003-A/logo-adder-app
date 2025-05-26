@@ -102,13 +102,7 @@ class State:
     use_default = False
     history = []
     history_index = -1
-    learned_prefs = []
-    net = None
-    processing_thread = None
-    processing_lock = threading.Lock()
-    crop_start = None
-    crop_end = None
-    cropping = False
+
 
 # Ensure directories exist
 def ensure_directories(base_path):
