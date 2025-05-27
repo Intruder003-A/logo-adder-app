@@ -62,6 +62,8 @@ try:
 except KeyError:
     FIREBASE_API_KEY = "AIzaSyD5DufwXe2cOPZniy-3K-LTRA-csWcbWEg"
     logging.warning("Using fallback Firebase API key")
+    
+
 
 # Configuration
 class Config:
@@ -986,7 +988,7 @@ def trigger_multiple_downloads(files):
 # Verify user
 def verify_user(email, password):
     try:
-        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
         payload = {
             "email": email.strip(),
             "password": password,
@@ -1436,7 +1438,7 @@ def main():
                         logging.error("Sign up attempted without email or password")
                     else:
                         try:
-                            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
+                            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
                             payload = {
                                 "email": email.strip(),
                                 "password": password,
