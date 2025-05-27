@@ -1,7 +1,7 @@
 import os
 import streamlit as st
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 from PIL import Image
 import numpy as np
 from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
