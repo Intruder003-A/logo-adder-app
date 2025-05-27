@@ -63,7 +63,13 @@ except KeyError:
     FIREBASE_API_KEY = "AIzaSyD5DufwXe2cOPZniy-3K-LTRA-csWcbWEg"
     logging.warning("Using fallback Firebase API key")
     
-
+# Load Firebase Web API key from secrets
+try:
+    api_key = st.secrets["firebase"]["api_key"]
+    logging.info("Loaded Firebase API key from st.secrets")
+except KeyError as e:
+    logging.error("Failed to load Firebase API key from st.secrets")
+    raise KeyError("Firebase API key not found in st.secrets['firebase']['api_key']")
 
 # Configuration
 class Config:
@@ -988,7 +994,7 @@ def trigger_multiple_downloads(files):
 # Verify user
 def verify_user(email, password):
     try:
-        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
         payload = {
             "email": email.strip(),
             "password": password,
@@ -1357,31 +1363,32 @@ def main():
     st.title("Logo Adder App")
 
     # Initialize session state
-    if 'user' not in st.session_state:
+    if "user" not in st.session_state:
         st.session_state.user = None
-    if 'user_id' not in st.session_state:
+    if "user_id" not in st.session_state:
         st.session_state.user_id = None
-    if 'device_id' not in st.session_state:
-        st.session_state.device_id = str(uuid.uuid4())
-    if 'patch_applied' not in st.session_state:
+    if "patch_applied" not in st.session_state:
         st.session_state.patch_applied = False
-    if 'blur_enabled' not in st.session_state:
-        st.session_state.blur_enabled = False
-    if 'logo_positions' not in st.session_state:
+    if "logo_positions" not in st.session_state:
         st.session_state.logo_positions = {}
-    if 'manual_positioning' not in st.session_state:
+    if "manual_positioning" not in st.session_state:
         st.session_state.manual_positioning = False
-    if 'selected_position' not in st.session_state:
+    if "blur_enabled" not in st.session_state:
+        st.session_state.blur_enabled = False
+    if "selected_position" not in st.session_state:
         st.session_state.selected_position = "Center"
-    if 'auth_error' not in st.session_state:
+    if "auth_error" not in st.session_state:
         st.session_state.auth_error = None
-    if 'reset_message' not in st.session_state:
+    if "reset_message" not in st.session_state:
         st.session_state.reset_message = None
-    if 'output_files' not in st.session_state:
+    if "output_files" not in st.session_state:
         st.session_state.output_files = []
-    logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
+    if "device_id" not in st.session_state:
+        st.session_state.device_id = str(uuid.uuid4())
+        logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
 
-    # Sidebar for login and patch application (unchanged)
+    # ... (Other main() code before sidebar remains unchanged)
+
     with st.sidebar:
         st.header("User Authentication")
         if not st.session_state.user:
@@ -1438,7 +1445,7 @@ def main():
                         logging.error("Sign up attempted without email or password")
                     else:
                         try:
-                            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
+                            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
                             payload = {
                                 "email": email.strip(),
                                 "password": password,
