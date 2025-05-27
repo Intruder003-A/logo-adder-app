@@ -1406,94 +1406,50 @@ def main():
     with st.sidebar:
         st.header("User Authentication")
         if not st.session_state.user:
-            auth_choice = st.radio("Choose Action", ["Login", "Sign Up"], key="auth_choice")
             email = st.text_input("Email")
             password = st.text_input("Password", type="password")
 
-            if auth_choice == "Login":
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    if st.button("Login"):
-                        if not email or not password:
-                            st.session_state.auth_error = "Please enter both email and password."
-                            logging.error("Login attempted without email or password")
-                        else:
-                            user_id, error = verify_user(email, password)
-                            if user_id:
-                                st.session_state.user = email
-                                st.session_state.user_id = user_id
-                                st.session_state.auth_error = None
-                                st.session_state.reset_message = None
-                                st.success(f"Logged in as {email}")
-                                logging.info(f"User logged in: {email}, user_id={user_id}")
-                                if check_license(user_id):
-                                    st.session_state.patch_applied = True
-                                else:
-                                    st.session_state.patch_applied = False
-                                st.rerun()
-                            else:
-                                st.session_state.auth_error = error
-                                logging.error(f"Login failed for {email}: {error}")
-                with col2:
-                    if st.button("Forgot Password?"):
-                        if not email:
-                            st.session_state.reset_message = "Please enter your email to reset the password."
-                            logging.error("Password reset attempted without email")
-                        else:
-                            try:
-                                user = auth.get_user_by_email(email)
-                                reset_link = auth.generate_password_reset_link(email)
-                                st.session_state.reset_message = f"Password reset link sent to {email}. Check your inbox."
-                                st.session_state.auth_error = None
-                                logging.info(f"Password reset link generated for {email}")
-                            except auth.UserNotFoundError:
-                                st.session_state.reset_message = "Email not registered. Please sign up."
-                                logging.error(f"Password reset failed: Email {email} not registered")
-                            except Exception as e:
-                                st.session_state.reset_message = f"Error generating reset link: {str(e)}"
-                                logging.error(f"Error generating reset link for {email}: {str(e)}")
-            else:  # Sign Up
-                if st.button("Sign Up"):
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("Login"):
                     if not email or not password:
                         st.session_state.auth_error = "Please enter both email and password."
-                        logging.error("Sign up attempted without email or password")
+                        logging.error("Login attempted without email or password")
                     else:
-                        try:
-                            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
-                            payload = {
-                                "email": email.strip(),
-                                "password": password,
-                                "returnSecureToken": True
-                            }
-                            response = requests.post(url, json=payload)
-                            response.raise_for_status()
-                            user_data = response.json()
-                            user_id = user_data.get("localId")
+                        user_id, error = verify_user(email, password)
+                        if user_id:
                             st.session_state.user = email
                             st.session_state.user_id = user_id
                             st.session_state.auth_error = None
                             st.session_state.reset_message = None
-                            st.success(f"Account created and logged in as {email}")
-                            logging.info(f"User signed up: {email}, user_id={user_id}")
+                            st.success(f"Logged in as {email}")
+                            logging.info(f"User logged in: {email}, user_id={user_id}")
                             if check_license(user_id):
                                 st.session_state.patch_applied = True
                             else:
                                 st.session_state.patch_applied = False
                             st.rerun()
-                        except requests.exceptions.HTTPError as e:
-                            error_response = response.json()
-                            error_code = error_response.get("error", {}).get("message", str(e))
-                            error_map = {
-                                "EMAIL_EXISTS": "This email is already registered. Try logging in.",
-                                "INVALID_EMAIL": "Invalid email format. Please check your email address.",
-                                "WEAK_PASSWORD": "Password must be at least 6 characters long."
-                            }
-                            user_message = error_map.get(error_code, f"Sign-up failed: {error_code}")
-                            st.session_state.auth_error = user_message
-                            logging.error(f"Sign-up failed for {email}: {error_code}")
+                        else:
+                            st.session_state.auth_error = error
+                            logging.error(f"Login failed for {email}: {error}")
+            with col2:
+                if st.button("Forgot Password?"):
+                    if not email:
+                        st.session_state.reset_message = "Please enter your email to reset the password."
+                        logging.error("Password reset attempted without email")
+                    else:
+                        try:
+                            user = auth.get_user_by_email(email)
+                            reset_link = auth.generate_password_reset_link(email)
+                            st.session_state.reset_message = f"Password reset link sent to {email}. Check your inbox."
+                            st.session_state.auth_error = None
+                            logging.info(f"Password reset link generated for {email}")
+                        except auth.UserNotFoundError:
+                            st.session_state.reset_message = "Email not registered. Please contact support."
+                            logging.error(f"Password reset failed: Email {email} not registered")
                         except Exception as e:
-                            st.session_state.auth_error = f"Unexpected error during sign-up: {str(e)}"
-                            logging.error(f"Unexpected error during sign-up for {email}: {str(e)}")
+                            st.session_state.reset_message = f"Error generating reset link: {str(e)}"
+                            logging.error(f"Error generating reset link for {email}: {str(e)}")
 
             if st.session_state.auth_error:
                 st.error(f"Error: {st.session_state.auth_error}")
@@ -1886,7 +1842,7 @@ def main():
                                 approved = review_blurred_regions(blurred_regions, media_type, Config.BASE_DIR, media_file.name)
                                 if not approved:
                                     st.error(f"Blurring not approved for {media_file.name}. Skipping processing.")
-                                    logging.info(f"Blurring not approved for {media_file.name}")
+                                    logging.info(f"Blurring not approved for { centrifugalmedia_file.name}")
                                     continue
                             logging.info(f"Applied face blurring to video {media_file.name}, saved to {temp_media_path}")
 
