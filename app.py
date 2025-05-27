@@ -1362,8 +1362,18 @@ def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.
 
 # Streamlit app
 def main():
-    st.set_page_config(page_title="Logo Adder App", layout="wide")
-    st.title("Logo Adder App")
+    st.set_page_config(page_title="Add Logo App", layout="wide")
+    st.title("Add Logo App")
+    
+    # Hide Streamlit toolbar and footer
+    hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+    """
+    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
     # Initialize session state
     if "user" not in st.session_state:
