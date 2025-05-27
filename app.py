@@ -65,8 +65,8 @@ except KeyError:
 
 # Configuration
 class Config:
-    LOGO_TRANSPARENCY = 0.5  # Default transparency
-    LOGO_OFFSET_PERCENT = 0.05
+    LOGO_TRANSPARENCY = 0.45  # Default transparency
+    LOGO_OFFSET_PERCENT = 0.5
     DEFAULT_MAX_EXECUTIONS = 27
     EXECUTION_COLLECTION = "executions"
     LICENSE_COLLECTION = "licenses"
