@@ -66,7 +66,7 @@ except KeyError:
 # Configuration
 class Config:
     LOGO_SIZE_PERCENT = 0.5  # Base scale for preset logo positions (50%)
-    LOGO_TRANSPARENCY = 0.5  # Default transparency
+    LOGO_TRANSPARENCY = 0.3  # Default transparency
     LOGO_OFFSET_PERCENT = 0.05  # Offset from edges for preset positions (5%)
     DEFAULT_MAX_EXECUTIONS = 27
     EXECUTION_COLLECTION = "executions"
