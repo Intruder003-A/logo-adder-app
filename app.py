@@ -26,8 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 db = None
 try:
     app_name = "logo_adder_app"
-    existing_apps = firebase_admin._apps
-    if app_name not in existing_apps:
+    if not firebase_admin.get_app(app_name, default=False):  # Check if app is not already initialized
         try:
             firebase_credentials = st.secrets["firebase"]["credential"]
             cred_dict = json.loads(firebase_credentials)
@@ -1390,8 +1389,6 @@ def main():
         logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
         logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}, blur_enabled={st.session_state.blur_enabled}, manual_positioning={st.session_state.manual_positioning}")
 
-    # ... (Other main() code before sidebar remains unchanged)
-
     with st.sidebar:
         st.header("User Authentication")
         if not st.session_state.user:
@@ -1430,8 +1427,9 @@ def main():
                             logging.error("Password reset attempted without email")
                         else:
                             try:
-                                user = auth.get_user_by_email(email)
-                                reset_link = auth.generate_password_reset_link(email)
+                                # Use firebase_admin.auth for password reset
+                                user = auth.get_user_by_email(email, app=firebase_admin.get_app(app_name))
+                                reset_link = auth.generate_password_reset_link(email, app=firebase_admin.get_app(app_name))
                                 st.session_state.reset_message = f"Password reset link sent to {email}. Check your inbox."
                                 st.session_state.auth_error = None
                                 logging.info(f"Password reset link generated for {email}")
@@ -1448,7 +1446,7 @@ def main():
                         logging.error("Sign up attempted without email or password")
                     else:
                         try:
-                            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
+                            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_API_KEY}"
                             payload = {
                                 "email": email.strip(),
                                 "password": password,
@@ -1543,6 +1541,7 @@ def main():
             st.markdown("---")
             debug_license_management(st.session_state.user_id)
 
+    # Rest of the main function remains unchanged...
     if st.session_state.user is None or not st.session_state.patch_applied:
         if st.session_state.user is None:
             st.warning("Please log in to use the app.")
