@@ -829,7 +829,7 @@ def increment_execution_count(user_id, file_name):
         return
 
     try:
-        doc_ref = db.collection(Config.EXECUTION_COUNT).document(user_id)
+        doc_ref = db.collection(Config.EXECUTION_COLLECTION).document(user_id)
         doc = doc_ref.get()
         if doc.exists:
             data = doc.to_dict()
