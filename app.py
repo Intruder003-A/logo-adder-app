@@ -986,27 +986,40 @@ def trigger_multiple_downloads(files):
 # Verify user
 def verify_user(email, password):
     try:
-        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
         payload = {
-            "email": email,
+            "email": email.strip(),
             "password": password,
             "returnSecureToken": True
         }
+        logging.info(f"Attempting to verify user: {email}")
         response = requests.post(url, json=payload)
         response.raise_for_status()
-        data = response.json()
-        if "idToken" in data:
-            user_id = data.get("localId")
-            logging.info(f"User {user_id} authenticated successfully")
-            return user_id, None
-        else:
-            error_message = data.get("error", {}).get("message", "Invalid credentials")
-            logging.error(f"Authentication failed: {error_message}")
-            return None, error_message
+        user_data = response.json()
+        user_id = user_data.get("localId")
+        logging.info(f"User verified successfully: {email}, user_id={user_id}")
+        return user_id, None
+    except requests.exceptions.HTTPError as e:
+        try:
+            error_response = response.json()
+            error_code = error_response.get("error", {}).get("message", str(e))
+            error_map = {
+                "INVALID_EMAIL": "Invalid email format. Please check your email address.",
+                "INVALID_PASSWORD": "Incorrect password. Try again or reset your password.",
+                "USER_NOT_FOUND": "No account found with this email. Please sign up.",
+                "USER_DISABLED": "This account is disabled. Contact support to enable it.",
+                "TOO_MANY_ATTEMPTS": "Too many login attempts. Try again later.",
+                "INVALID_LOGIN_CREDENTIALS": "Invalid login credentials."
+            }
+            user_message = error_map.get(error_code, f"Authentication failed: {error_code}")
+            logging.error(f"Error verifying user {email}: {error_code}")
+            return None, user_message
+        except:
+            logging.error(f"Error verifying user {email}: {str(e)}")
+            return None, f"Failed to verify user: {str(e)}"
     except Exception as e:
-        logging.error(f"Error verifying user: {str(e)}")
-        st.error(f"Error verifying credentials: {str(e)}")
-        return None, str(e)
+        logging.error(f"Unexpected error verifying user {email}: {str(e)}")
+        return None, f"An unexpected error occurred: {str(e)}"
 
 # Debug tool to manage license
 def debug_license_management(user_id):
@@ -1369,54 +1382,100 @@ def main():
     # Sidebar for login and patch application (unchanged)
     with st.sidebar:
         st.header("User Authentication")
-        if st.session_state.user is None:
+        if not st.session_state.user:
+            auth_choice = st.radio("Choose Action", ["Login", "Sign Up"], key="auth_choice")
             email = st.text_input("Email")
             password = st.text_input("Password", type="password")
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                if st.button("Login"):
+
+            if auth_choice == "Login":
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("Login"):
+                        if not email or not password:
+                            st.session_state.auth_error = "Please enter both email and password."
+                            logging.error("Login attempted without email or password")
+                        else:
+                            user_id, error = verify_user(email, password)
+                            if user_id:
+                                st.session_state.user = email
+                                st.session_state.user_id = user_id
+                                st.session_state.auth_error = None
+                                st.session_state.reset_message = None
+                                st.success(f"Logged in as {email}")
+                                logging.info(f"User logged in: {email}, user_id={user_id}")
+                                if check_license(user_id):
+                                    st.session_state.patch_applied = True
+                                else:
+                                    st.session_state.patch_applied = False
+                                st.rerun()
+                            else:
+                                st.session_state.auth_error = error
+                                logging.error(f"Login failed for {email}: {error}")
+                with col2:
+                    if st.button("Forgot Password?"):
+                        if not email:
+                            st.session_state.reset_message = "Please enter your email to reset the password."
+                            logging.error("Password reset attempted without email")
+                        else:
+                            try:
+                                auth.get_user_by_email(email)
+                                reset_link = auth.generate_password_reset_link(email)
+                                st.session_state.reset_message = f"Password reset link sent to {email}. Check your inbox."
+                                st.session_state.auth_error = None
+                                logging.info(f"Password reset link generated for {email}")
+                            except auth.UserNotFoundError:
+                                st.session_state.reset_message = "Email not registered."
+                                logging.error(f"Password reset failed: Email {email} not registered")
+                            except Exception as e:
+                                st.session_state.reset_message = f"Error generating reset link: {str(e)}"
+                                logging.error(f"Error generating reset link for {email}: {str(e)}")
+            else:  # Sign Up
+                if st.button("Sign Up"):
                     if not email or not password:
                         st.session_state.auth_error = "Please enter both email and password."
-                        logging.error("Login attempted without email or password")
+                        logging.error("Sign up attempted without email or password")
                     else:
-                        user_id, error = verify_user(email, password)
-                        if user_id:
+                        try:
+                            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
+                            payload = {
+                                "email": email.strip(),
+                                "password": password,
+                                "returnSecureToken": True
+                            }
+                            response = requests.post(url, json=payload)
+                            response.raise_for_status()
+                            user_data = response.json()
+                            user_id = user_data.get("localId")
                             st.session_state.user = email
                             st.session_state.user_id = user_id
                             st.session_state.auth_error = None
                             st.session_state.reset_message = None
-                            st.success(f"Logged in as {email}")
-                            logging.info(f"User logged in: {email}, user_id={user_id}")
+                            st.success(f"Account created and logged in as {email}")
+                            logging.info(f"User signed up: {email}, user_id={user_id}")
                             if check_license(user_id):
                                 st.session_state.patch_applied = True
                             else:
                                 st.session_state.patch_applied = False
                             st.rerun()
-                        else:
-                            st.session_state.auth_error = error
-                            logging.error(f"Login failed for {email}: {error}")
-            with col2:
-                if st.button("Forgot Password?"):
-                    if not email:
-                        st.session_state.reset_message = "Please enter your email to reset the password."
-                        logging.error("Password reset attempted without email")
-                    else:
-                        try:
-                            auth.get_user_by_email(email)
-                            reset_link = auth.generate_password_reset_link(email)
-                            st.session_state.reset_message = f"Password reset link: {reset_link}"
-                            st.session_state.auth_error = None
-                            logging.info(f"Password reset link generated for {email}")
-                        except auth.UserNotFoundError:
-                            st.session_state.reset_message = "Email not registered."
-                            logging.error(f"Password reset failed: Email {email} not registered")
+                        except requests.exceptions.HTTPError as e:
+                            error_response = response.json()
+                            error_code = error_response.get("error", {}).get("message", str(e))
+                            error_map = {
+                                "EMAIL_EXISTS": "This email is already registered. Try logging in.",
+                                "INVALID_EMAIL": "Invalid email format. Please check your email address.",
+                                "WEAK_PASSWORD": "Password must be at least 6 characters long."
+                            }
+                            user_message = error_map.get(error_code, f"Sign-up failed: {error_code}")
+                            st.session_state.auth_error = user_message
+                            logging.error(f"Sign-up failed for {email}: {error_code}")
                         except Exception as e:
-                            st.session_state.reset_message = f"Error generating reset link: {str(e)}"
-                            logging.error(f"Error generating reset link: {str(e)}")
+                            st.session_state.auth_error = f"Unexpected error during sign-up: {str(e)}"
+                            logging.error(f"Unexpected error during sign-up for {email}: {str(e)}")
+
             if st.session_state.auth_error:
-                st.error(f"Login failed: {st.session_state.auth_error}")
+                st.error(f"Error: {st.session_state.auth_error}")
             if st.session_state.reset_message:
-                if "link" in st.session_state.reset_message:
+                if "reset link" in st.session_state.reset_message.lower():
                     st.success(st.session_state.reset_message)
                 else:
                     st.error(st.session_state.reset_message)
