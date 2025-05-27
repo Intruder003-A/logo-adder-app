@@ -63,6 +63,7 @@ except KeyError:
     FIREBASE_API_KEY = "AIzaSyD5DufwXe2cOPZniy-3K-LTRA-csWcbWEg"
     logging.warning("Using fallback Firebase API key")
     
+
 # Load Firebase Web API key from secrets
 try:
     api_key = st.secrets["firebase"]["api_key"]
@@ -70,6 +71,19 @@ try:
 except KeyError as e:
     logging.error("Failed to load Firebase API key from st.secrets")
     raise KeyError("Firebase API key not found in st.secrets['firebase']['api_key']")
+
+# Firebase Admin SDK initialization
+try:
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(st.secrets["firebase"]["service_account"])
+        firebase_admin.initialize_app(cred)
+        logging.info("Firebase Admin SDK and Firestore initialized successfully")
+    else:
+        logging.info("Firebase Admin SDK already initialized, using existing Firestore client")
+    db = firestore.client()
+except Exception as e:
+    logging.error(f"Failed to initialize Firebase Admin SDK: {str(e)}")
+    raise
 
 # Configuration
 class Config:
@@ -1017,7 +1031,7 @@ def verify_user(email, password):
                 "USER_NOT_FOUND": "No account found with this email. Please sign up.",
                 "USER_DISABLED": "This account is disabled. Contact support to enable it.",
                 "TOO_MANY_ATTEMPTS": "Too many login attempts. Try again later.",
-                "INVALID_LOGIN_CREDENTIALS": "Invalid login credentials."
+                "INVALID_LOGIN_CREDENTIALS": "Invalid email or password. Please sign up if you don't have an account or reset your password."
             }
             user_message = error_map.get(error_code, f"Authentication failed: {error_code}")
             logging.error(f"Error verifying user {email}: {error_code}")
@@ -1386,6 +1400,7 @@ def main():
     if "device_id" not in st.session_state:
         st.session_state.device_id = str(uuid.uuid4())
         logging.info(f"Initialized session state with device_id: {st.session_state.device_id}")
+        logging.info(f"Session state at start: user={st.session_state.user}, user_id={st.session_state.user_id}, device_id={st.session_state.device_id}, patch_applied={st.session_state.patch_applied}, blur_enabled={st.session_state.blur_enabled}, manual_positioning={st.session_state.manual_positioning}")
 
     # ... (Other main() code before sidebar remains unchanged)
 
@@ -1427,13 +1442,13 @@ def main():
                             logging.error("Password reset attempted without email")
                         else:
                             try:
-                                auth.get_user_by_email(email)
+                                user = auth.get_user_by_email(email)
                                 reset_link = auth.generate_password_reset_link(email)
                                 st.session_state.reset_message = f"Password reset link sent to {email}. Check your inbox."
                                 st.session_state.auth_error = None
                                 logging.info(f"Password reset link generated for {email}")
                             except auth.UserNotFoundError:
-                                st.session_state.reset_message = "Email not registered."
+                                st.session_state.reset_message = "Email not registered. Please sign up."
                                 logging.error(f"Password reset failed: Email {email} not registered")
                             except Exception as e:
                                 st.session_state.reset_message = f"Error generating reset link: {str(e)}"
