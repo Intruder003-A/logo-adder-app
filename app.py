@@ -19,6 +19,15 @@ import mediapipe as mp
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
+hide_streamlit_style = """
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+</style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -1361,8 +1370,8 @@ def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.
 
 # Streamlit app
 def main():
-    st.set_page_config(page_title="Logo Adder App", layout="wide")
-    st.title("Logo Adder App")
+    st.set_page_config(page_title="Add Logo App", layout="wide")
+    st.title("Add Logo")
 
     # Initialize session state
     if "user" not in st.session_state:
