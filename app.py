@@ -544,7 +544,7 @@ def overlay_logo_on_image(image, logo_path, position="center", media_key=None):
         else:
             x_pos, y_pos = None, None
             scale = 1.0
-            opacity = 1.0
+            opacity = Config.LOGO_TRANSPARENCY
             rotation = 0
             base_scale = Config.LOGO_SIZE_PERCENT  # Use 0.5 for preset positions
             logging.info(f"Using preset position: {position}")
@@ -626,7 +626,7 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center",
         else:
             x_pos, y_pos = None, None
             scale = 1.0
-            opacity = 1.0
+            opacity = Config.LOGO_TRANSPARENCY
             rotation = 0
             base_scale = Config.LOGO_SIZE_PERCENT  # Use 0.5 for preset positions
             logging.info(f"Using preset position for video: {position}")
@@ -1272,6 +1272,11 @@ def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.
         if not has_transparency:
             logging.warning(f"Logo {os.path.basename(logo_path)} has no transparent areas.")
         
+        # Use Config.LOGO_TRANSPARENCY for preset positions (default x_pos, y_pos)
+        if x_pos == 500 and y_pos == 500:
+            opacity = Config.LOGO_TRANSPARENCY
+            logging.info(f"Using preset opacity={opacity} for preview")
+        
         # Apply opacity to logo
         if opacity < 1.0:
             logo_data = logo_image.split()
@@ -1291,7 +1296,7 @@ def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.
             if logo_width > 0:
                 logo_ratio = logo_width / logo_image.size[0]
                 logo_height = int(logo_image.size[1] * logo_ratio)
-                logo_image = logo_image.resize((logo_width, logo_height), Image.LANCZOS)
+                logo_image = logo_image.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
             else:
                 logging.warning(f"Invalid logo width {logo_width} for scale {scale}. Using original size.")
             x = min(max(0, x_pos), media_width - logo_width)
@@ -1314,7 +1319,7 @@ def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.
             if logo_width > 0:
                 logo_ratio = logo_width / logo_image.size[0]
                 logo_height = int(logo_image.size[1] * logo_ratio)
-                logo_image = logo_image.resize((logo_width, logo_height), Image.LANCZOS)
+                logo_image = logo_image.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
             else:
                 logging.warning(f"Invalid logo width {logo_width} for scale {scale}. Using original size.")
             x = min(max(0, x_pos), media_width - logo_width)
