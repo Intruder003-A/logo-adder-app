@@ -65,8 +65,9 @@ except KeyError:
 
 # Configuration
 class Config:
-    LOGO_TRANSPARENCY = 0.45  # Default transparency
-    LOGO_OFFSET_PERCENT = 0.5
+    LOGO_SIZE_PERCENT = 0.5  # Base scale for preset logo positions (50%)
+    LOGO_TRANSPARENCY = 0.5  # Default transparency
+    LOGO_OFFSET_PERCENT = 0.05  # Offset from edges for preset positions (5%)
     DEFAULT_MAX_EXECUTIONS = 27
     EXECUTION_COLLECTION = "executions"
     LICENSE_COLLECTION = "licenses"
@@ -538,17 +539,18 @@ def overlay_logo_on_image(image, logo_path, position="center", media_key=None):
             scale = params.get("scale", 1.0)
             opacity = params.get("opacity", 1.0)
             rotation = params.get("rotation", 0)
+            base_scale = 0.1  # Base scale for manual positioning
             logging.info(f"Using manual position for {media_key}: x={x_pos}, y={y_pos}, scale={scale}, opacity={opacity}, rotation={rotation}")
         else:
             x_pos, y_pos = None, None
             scale = 1.0
             opacity = 1.0
             rotation = 0
+            base_scale = Config.LOGO_SIZE_PERCENT  # Use 0.5 for preset positions
             logging.info(f"Using preset position: {position}")
 
-        # Resize logo using consistent base scale (0.1) and user-specified scale
-        BASE_SCALE = 0.1  # Matches preview scaling
-        max_logo_width = int(img_width * BASE_SCALE * scale)
+        # Resize logo using appropriate base scale and user-specified scale
+        max_logo_width = int(img_width * base_scale * scale)
         if max_logo_width > 0:
             logo_ratio = max_logo_width / logo.size[0]
             logo_height = int(logo.size[1] * logo_ratio)
@@ -596,7 +598,7 @@ def overlay_logo_on_image(image, logo_path, position="center", media_key=None):
         output = Image.new("RGBA", image.size)
         output.paste(image, (0, 0))
         output.paste(logo, (x, y), logo)
-        logging.info(f"Logo overlaid on image at ({x}, {y}) with size={logo.size}, scale={scale}, opacity={opacity}, rotation={rotation}")
+        logging.info(f"Logo overlaid on image at ({x}, {y}) with size={logo.size}, scale={scale}, base_scale={base_scale}, opacity={opacity}, rotation={rotation}")
         return output
     except Exception as e:
         logging.error(f"Error overlaying logo on image: {str(e)}")
@@ -619,17 +621,18 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center",
             scale = params.get("scale", 1.0)
             opacity = params.get("opacity", 1.0)
             rotation = params.get("rotation", 0)
+            base_scale = 0.1  # Base scale for manual positioning
             logging.info(f"Using manual position for video {media_key}: x={x_pos}, y={y_pos}, scale={scale}, opacity={opacity}, rotation={rotation}")
         else:
             x_pos, y_pos = None, None
             scale = 1.0
             opacity = 1.0
             rotation = 0
+            base_scale = Config.LOGO_SIZE_PERCENT  # Use 0.5 for preset positions
             logging.info(f"Using preset position for video: {position}")
 
-        # Resize logo using consistent base scale (0.1) and user-specified scale
-        BASE_SCALE = 0.1  # Matches preview scaling
-        max_logo_width = int(vid_width * BASE_SCALE * scale)
+        # Resize logo using appropriate base scale and user-specified scale
+        max_logo_width = int(vid_width * base_scale * scale)
         if max_logo_width > 0:
             logo_ratio = max_logo_width / logo.size[0]
             logo_height = int(logo.size[1] * logo_ratio)
@@ -698,7 +701,7 @@ def overlay_logo_on_video(video_path, logo_path, output_path, position="center",
         final_clip.close()
         if os.path.exists(temp_logo_path):
             os.remove(temp_logo_path)
-        logging.info(f"Video saved with logo to {output_path} at ({x}, {y}), size={logo.size}, scale={scale}, opacity={opacity}, rotation={rotation}, audio={'preserved' if audio else 'none'}")
+        logging.info(f"Video saved with logo to {output_path} at ({x}, {y}), size={logo.size}, scale={scale}, base_scale={base_scale}, opacity={opacity}, rotation={rotation}, audio={'preserved' if audio else 'none'}")
     except Exception as e:
         logging.error(f"Error processing video: {str(e)}")
         st.error(f"Failed to process video: {str(e)}")
@@ -1282,8 +1285,9 @@ def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.
         if media_type == "image":
             media_image = Image.open(media_path).convert("RGBA")
             media_width, media_height = media_image.size
-            BASE_SCALE = 0.1  # Matches output scaling
-            logo_width = int(media_width * BASE_SCALE * scale)
+            # Use Config.LOGO_SIZE_PERCENT for preset positions, 0.1 for manual
+            base_scale = 0.1 if x_pos != 500 or y_pos != 500 else Config.LOGO_SIZE_PERCENT
+            logo_width = int(media_width * base_scale * scale)
             if logo_width > 0:
                 logo_ratio = logo_width / logo_image.size[0]
                 logo_height = int(logo_image.size[1] * logo_ratio)
@@ -1297,15 +1301,16 @@ def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.
             preview_image.paste(logo_image, (x, y), logo_image)
             output = io.BytesIO()
             preview_image.save(output, format="PNG")
-            logging.info(f"Generated preview for {os.path.basename(media_path)} with logo size=({logo_width}, {logo_height}), scale={scale}, opacity={opacity}, rotation={rotation}")
+            logging.info(f"Generated preview for {os.path.basename(media_path)} with logo size=({logo_width}, {logo_height}), scale={scale}, base_scale={base_scale}, opacity={opacity}, rotation={rotation}")
             return output.getvalue()
         else:
             video = VideoFileClip(media_path)
             frame = video.get_frame(0)
             media_image = Image.fromarray(frame).convert("RGBA")
             media_width, media_height = media_image.size
-            BASE_SCALE = 0.1  # Matches output scaling
-            logo_width = int(media_width * BASE_SCALE * scale)
+            # Use Config.LOGO_SIZE_PERCENT for preset positions, 0.1 for manual
+            base_scale = 0.1 if x_pos != 500 or y_pos != 500 else Config.LOGO_SIZE_PERCENT
+            logo_width = int(media_width * base_scale * scale)
             if logo_width > 0:
                 logo_ratio = logo_width / logo_image.size[0]
                 logo_height = int(logo_image.size[1] * logo_ratio)
@@ -1320,7 +1325,7 @@ def generate_preview_image(media_path, logo_path, x_pos=500, y_pos=500, scale=1.
             output = io.BytesIO()
             preview_image.save(output, format="PNG")
             video.close()
-            logging.info(f"Generated preview for {os.path.basename(media_path)} with logo size=({logo_width}, {logo_height}), scale={scale}, opacity={opacity}, rotation={rotation}")
+            logging.info(f"Generated preview for {os.path.basename(media_path)} with logo size=({logo_width}, {logo_height}), scale={scale}, base_scale={base_scale}, opacity={opacity}, rotation={rotation}")
             return output.getvalue()
     except Exception as e:
         logging.error(f"Error generating preview for {os.path.basename(media_path)}: {str(e)}\n{traceback.format_exc()}")
