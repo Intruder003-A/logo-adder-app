@@ -72,18 +72,6 @@ except KeyError as e:
     logging.error("Failed to load Firebase API key from st.secrets")
     raise KeyError("Firebase API key not found in st.secrets['firebase']['api_key']")
 
-# Firebase Admin SDK initialization
-try:
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(st.secrets["firebase"]["service_account"])
-        firebase_admin.initialize_app(cred)
-        logging.info("Firebase Admin SDK and Firestore initialized successfully")
-    else:
-        logging.info("Firebase Admin SDK already initialized, using existing Firestore client")
-    db = firestore.client()
-except Exception as e:
-    logging.error(f"Failed to initialize Firebase Admin SDK: {str(e)}")
-    raise
 
 # Configuration
 class Config:
